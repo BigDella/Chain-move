@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 
 import { getSessionFromCookies } from "@/lib/auth/session"
 import dbConnect from "@/lib/dbConnect"
+import { sendEmail } from "@/lib/services/email.service"
 import { logAuditEvent } from "@/lib/security/audit-log"
 import { isSupportedKycDocumentReference } from "@/lib/security/kyc-documents"
 import User from "@/models/User"
@@ -13,6 +14,10 @@ type KycStatus = "none" | "pending" | "approved_stage1" | "pending_stage2" | "ap
 type PhysicalMeetingStatus = "none" | "scheduled" | "approved" | "rescheduled" | "completed" | "rejected_stage2"
 type KycUserRole = "driver" | "investor"
 
+const KYC_NOTIFICATION_LINK: Record<KycUserRole, string> = {
+  driver: "/dashboard/driver/kyc/status",
+  investor: "/dashboard/investor/kyc/status",
+}
 
 function normalizeDateInput(value: Date | string | null | undefined) {
   if (!value) return null
@@ -54,6 +59,31 @@ function formatMeetingDate(date: Date | null) {
     month: "long",
     year: "numeric",
   })
+}
+
+function buildEmailHtml(name: string, message: string) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+      <h2 style="color: #E57700; margin-bottom: 16px;">ChainMove Account Update</h2>
+      <p style="margin-bottom: 12px;">Hello ${name},</p>
+      <p style="margin-bottom: 12px; line-height: 1.6;">${message}</p>
+      <p style="margin-bottom: 0;">Please sign in to your dashboard for full details.</p>
+    </div>
+  `
+}
+
+async function sendKycEmail(user: any, subject: string, message: string) {
+  if (!user?.email) return
+
+  try {
+    await sendEmail({
+      to: user.email,
+      subject,
+      html: buildEmailHtml(user.name || "there", message),
+    })
+  } catch (error) {
+    console.error("KYC_EMAIL_SEND_ERROR", error)
+  }
 }
 
 function buildKycNotification({

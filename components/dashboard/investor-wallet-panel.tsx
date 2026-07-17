@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { useFundWallet, useWallets } from "@privy-io/react-auth"
 import { formatEther } from "viem"
-import { liskSepolia } from "viem/chains"
 import {
   ArrowRight,
   CheckCircle2,
@@ -18,15 +16,21 @@ import {
 import { useAuth } from "@/hooks/use-auth"
 import { formatNaira } from "@/lib/currency"
 import { getPrivyFundingErrorMessage, startPrivyFunding } from "@/lib/auth/privy-funding"
+import { useFundWallet, useWallets } from "@/lib/privy/react-auth"
 import { cn } from "@/lib/utils"
 import { InvestorWalletDedicatedAccountCard } from "@/components/dashboard/investor-wallet-dedicated-account-card"
 import { useToast } from "@/hooks/use-toast"
+import { isMockStellar } from "@/lib/mock-stellar/mockConfig"
+import { mockAccount } from "@/lib/mock-stellar/mockAccount"
+import { mockAssets } from "@/lib/mock-stellar/mockAssets"
+import { mockActivity } from "@/lib/mock-stellar/mockActivity"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
+import { CURRENT_EMBEDDED_WALLET, getWalletDisplay, shortenWalletAddress } from "@/lib/wallet/config"
 import {
   Table,
   TableBody,
@@ -62,11 +66,6 @@ interface InvestorWalletPanelProps {
   showTitle?: boolean
 }
 
-function truncateAddress(address: string) {
-  if (address.length < 10) return address
-  return `${address.slice(0, 6)}...${address.slice(-4)}`
-}
-
 function toPaystackAmount(value: string) {
   const parsed = Number.parseFloat(value)
   if (!Number.isFinite(parsed)) return null
@@ -83,7 +82,8 @@ function isValidEmail(value: string) {
 }
 
 async function resolveOnchainBalance(address: string) {
-  const rpcUrl = liskSepolia.rpcUrls.default.http[0]
+  const rpcUrl = CURRENT_EMBEDDED_WALLET.network.rpcUrl
+  if (!rpcUrl) return null
   const response = await fetch(rpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -100,7 +100,7 @@ async function resolveOnchainBalance(address: string) {
 
   const balance = Number.parseFloat(formatEther(BigInt(payload.result)))
   if (!Number.isFinite(balance)) return null
-  return `${balance.toFixed(4)} ETH`
+  return `${balance.toFixed(4)} ${CURRENT_EMBEDDED_WALLET.network.nativeAsset}`
 }
 
 export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle = true }: InvestorWalletPanelProps) {
@@ -128,10 +128,26 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
     [wallets],
   )
 
-  const walletAddress = walletSummary?.wallet.walletAddress || embeddedWallet?.address || authUser?.walletAddress || ""
+  const walletAddress = isMockStellar ? mockAccount.publicKey : (walletSummary?.wallet.walletAddress || embeddedWallet?.address || authUser?.walletAddress || "")
+  const walletDisplay = getWalletDisplay({
+    embeddedWalletAddress: walletAddress,
+    stellarPublicKey: isMockStellar ? mockAccount.publicKey : authUser?.stellarPublicKey,
+  })
   const internalBalance = walletSummary?.wallet.internalBalanceNgn || 0
 
   const fundingTransactions = useMemo(() => {
+    if (isMockStellar) {
+      return mockActivity.map(activity => ({
+        id: activity.id,
+        type: activity.type,
+        amount: Number.parseFloat(activity.amount),
+        currency: "USD",
+        status: activity.status,
+        method: "Stellar Demo",
+        description: activity.type,
+        timestamp: activity.timestamp,
+      }))
+    }
     if (!walletSummary?.transactions) return []
     return walletSummary.transactions
       .filter((tx) => tx.type === "wallet_funding" || tx.type === "deposit")
@@ -141,6 +157,15 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
   const loadWalletSummary = useCallback(async () => {
     setIsSummaryLoading(true)
     setSummaryError(null)
+
+    if (isMockStellar) {
+      setWalletSummary({
+        wallet: { internalBalanceNgn: 150000, walletAddress: mockAccount.publicKey },
+        transactions: []
+      })
+      setIsSummaryLoading(false)
+      return
+    }
 
     try {
       const response = await fetch("/api/wallet/summary")
@@ -199,12 +224,12 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
   )
 
   const openWalletExplorer = () => {
-    if (!walletAddress) return
-    window.open(`https://sepolia-blockscout.lisk.com/address/${walletAddress}`, "_blank", "noopener,noreferrer")
+    if (!walletDisplay.explorerUrl) return
+    window.open(walletDisplay.explorerUrl, "_blank", "noopener,noreferrer")
   }
 
   const handleOpenWalletView = () => {
-    if (!walletAddress) {
+    if (!walletDisplay.explorerUrl) {
       toast({
         title: "Wallet unavailable",
         description: "Your embedded wallet address is not ready yet. Please sign out and sign in again.",
@@ -221,6 +246,14 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
   }
 
   const handlePrivyFunding = async () => {
+    if (isMockStellar) {
+      toast({
+        title: "Mock Demo",
+        description: "Funding disabled in demo mode.",
+      })
+      return
+    }
+
     if (!walletAddress) {
       toast({
         title: "Wallet unavailable",
@@ -329,8 +362,8 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
   }
 
   const handleCopyAddress = async () => {
-    if (!walletAddress) return
-    await navigator.clipboard.writeText(walletAddress)
+    if (!walletDisplay.address) return
+    await navigator.clipboard.writeText(walletDisplay.address)
     toast({
       title: "Address copied",
       description: "Wallet address copied to clipboard.",
@@ -367,6 +400,12 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
   }, [searchParams, verifyPaymentReference])
 
   useEffect(() => {
+    if (isMockStellar) {
+      setOnchainBalance(mockAccount.balance)
+      setOnchainLoading(false)
+      return
+    }
+
     if (!walletAddress) {
       setOnchainBalance(null)
       return
@@ -471,14 +510,15 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
           </div>
 
           <div className="rounded-xl border bg-muted/20 p-4">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Wallet address</p>
-            <p className="mt-2 break-all font-mono text-sm">{walletAddress ? truncateAddress(walletAddress) : "Not available"}</p>
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">{walletDisplay.addressLabel}</p>
+            <p className="mt-2 break-all font-mono text-sm">{walletDisplay.address ? shortenWalletAddress(walletDisplay.address) : "Not available"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{walletDisplay.networkLabel}</p>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleCopyAddress} disabled={!walletAddress}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleCopyAddress} disabled={!walletDisplay.address}>
                 <Copy className="mr-1.5 h-3.5 w-3.5" />
                 Copy
               </Button>
-              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleOpenWalletView} disabled={!walletAddress}>
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleOpenWalletView} disabled={!walletDisplay.explorerUrl}>
                 <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                 Open wallet
               </Button>
@@ -487,8 +527,21 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
 
           <div className="rounded-xl border bg-muted/20 p-4">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Onchain balance</p>
-            <p className="mt-2 text-xl font-semibold">{onchainLoading ? "Loading..." : onchainBalance || "Unavailable"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Lisk Sepolia embedded wallet</p>
+            {isMockStellar ? (
+              <div className="mt-2 space-y-1">
+                {mockAssets.map(asset => (
+                  <div key={asset.code} className="flex justify-between items-center text-sm">
+                    <span className="font-medium">{asset.code}</span>
+                    <span>{asset.balance}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-xl font-semibold">{onchainLoading ? "Loading..." : onchainBalance || "Unavailable"}</p>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {isMockStellar ? "Stellar Mock Assets" : `${CURRENT_EMBEDDED_WALLET.network.label} embedded wallet`}
+            </p>
           </div>
         </div>
 

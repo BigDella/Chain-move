@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useIdentityToken, usePrivy } from "@privy-io/react-auth"
 import { AlertCircle, ArrowRight, Car, Loader2, Phone, TrendingUp, User } from "lucide-react"
 
 import { AuthInput } from "@/components/auth/AuthInput"
@@ -11,6 +10,7 @@ import { AuthLayout } from "@/components/auth/AuthLayout"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { resolvePrivyAccessToken } from "@/lib/auth/privy-client"
+import { useIdentityToken, usePrivy } from "@/lib/privy/react-auth"
 import { validatePhoneNumberInput } from "@/lib/validation/phone"
 
 type UserRole = "driver" | "investor"
