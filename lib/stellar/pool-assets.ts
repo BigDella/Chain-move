@@ -41,11 +41,7 @@ const ASSET_CODE_MAX_LENGTH = 12
 const ASSET_CODE_ALPHANUMERIC_ONLY = /^[A-Z0-9]+$/
 
 export function generatePoolAssetCode(poolId: string, assetType: PoolAssetType): string {
-  if (!poolId || typeof poolId !== "string") {
-    throw new Error("Pool ID is required to generate asset code")
-  }
-
-  if (!mongoose.Types.ObjectId.isValid(poolId)) {
+  if (typeof poolId !== "string" || !mongoose.Types.ObjectId.isValid(poolId)) {
     throw new Error("Invalid pool ID format")
   }
 
@@ -65,11 +61,11 @@ export function generatePoolAssetCode(poolId: string, assetType: PoolAssetType):
 }
 
 export function validateAssetCode(assetCode: string): { valid: boolean; error?: string } {
-  if (!assetCode || typeof assetCode !== "string") {
+  if (typeof assetCode !== "string") {
     return { valid: false, error: "Asset code is required" }
   }
 
-  const trimmed = assetCode.trim().toUpperCase()
+  const trimmed = assetCode.trim()
 
   if (trimmed.length === 0) {
     return { valid: false, error: "Asset code cannot be empty" }
