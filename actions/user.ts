@@ -1,23 +1,18 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { Resend } from "resend"
 
 import { getSessionFromCookies } from "@/lib/auth/session"
 import dbConnect from "@/lib/dbConnect"
 import { logAuditEvent } from "@/lib/security/audit-log"
 import { isSupportedKycDocumentReference } from "@/lib/security/kyc-documents"
 import User from "@/models/User"
+import { publishNotificationEvent } from "@/lib/notifications/service"
 
 type KycStatus = "none" | "pending" | "approved_stage1" | "pending_stage2" | "approved_stage2" | "rejected"
 type PhysicalMeetingStatus = "none" | "scheduled" | "approved" | "rescheduled" | "completed" | "rejected_stage2"
 type KycUserRole = "driver" | "investor"
 
-const KYC_NOTIFICATION_LINK: Record<KycUserRole, string> = {
-  driver: "/dashboard/driver/kyc/status",
-  investor: "/dashboard/investor/kyc/status",
-}
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null
 
 function normalizeDateInput(value: Date | string | null | undefined) {
   if (!value) return null
@@ -51,9 +46,6 @@ function normalizeReason(reason: string | null | undefined) {
   return trimmed.length > 0 ? trimmed.slice(0, 500) : null
 }
 
-function buildNotificationId() {
-  return `notif_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
-}
 
 function formatMeetingDate(date: Date | null) {
   if (!date) return "your scheduled date"
@@ -62,32 +54,6 @@ function formatMeetingDate(date: Date | null) {
     month: "long",
     year: "numeric",
   })
-}
-
-function buildEmailHtml(name: string, message: string) {
-  return `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
-      <h2 style="color: #E57700; margin-bottom: 16px;">ChainMove Account Update</h2>
-      <p style="margin-bottom: 12px;">Hello ${name},</p>
-      <p style="margin-bottom: 12px; line-height: 1.6;">${message}</p>
-      <p style="margin-bottom: 0;">Please sign in to your dashboard for full details.</p>
-    </div>
-  `
-}
-
-async function sendKycEmail(user: any, subject: string, message: string) {
-  if (!resend || !user?.email) return
-
-  try {
-    await resend.emails.send({
-      from: "onboarding@chainmove.xyz",
-      to: user.email,
-      subject,
-      html: buildEmailHtml(user.name || "there", message),
-    })
-  } catch (error) {
-    console.error("KYC_EMAIL_SEND_ERROR", error)
-  }
 }
 
 function buildKycNotification({
@@ -438,18 +404,6 @@ export async function updateUserKycStatus(
       reason: normalizedReason,
     })
 
-    if (notification) {
-      user.notifications = Array.isArray(user.notifications) ? user.notifications : []
-      user.notifications.push({
-        id: buildNotificationId(),
-        title: notification.title,
-        message: notification.message,
-        read: false,
-        timestamp: new Date(),
-        link: KYC_NOTIFICATION_LINK[userRole],
-      })
-    }
-
     await user.save()
 
     await logAuditEvent({
@@ -466,7 +420,12 @@ export async function updateUserKycStatus(
     })
 
     if (notification) {
-      await sendKycEmail(user, notification.subject, notification.emailMessage)
+      const decision = user.kycStatus === "rejected" ? "rejected" : user.kycStatus === "approved_stage2" ? "approved" : "review"
+      await publishNotificationEvent({
+        type: "kyc.decision", version: 1, userId: user._id.toString(),
+        eventId: `kyc:${user._id}:${user.kycStatus}:${user.physicalMeetingStatus || "none"}`,
+        occurredAt: new Date().toISOString(), payload: { decision },
+      })
     }
 
     revalidatePath("/dashboard/driver")
