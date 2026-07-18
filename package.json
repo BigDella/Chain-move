@@ -10,8 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "next start",
-    "openapi:generate": "tsx scripts/generate-openapi.ts",
-    "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",
+    "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
     "demo:pool-asset": "tsx scripts/demo-pool-asset.ts"
   },
   "dependencies": {
