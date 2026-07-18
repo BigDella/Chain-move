@@ -52,8 +52,8 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
-      - name: Configuration checks
-        run: npm run config:check-env
+      - name: OpenAPI contract checks
+        run: npm run openapi:check
 
       - name: Build
         run: npm run build
@@ -101,8 +101,8 @@ jobs:
       - name: TypeScript check
         run: npm run typecheck
 
-      - name: Configuration checks
-        run: npm run config:check-env
+      - name: OpenAPI contract checks
+        run: npm run openapi:check
 
       - name: Build
         run: npm run build
