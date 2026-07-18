@@ -10,8 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "next start",
-    "config:diagnostics": "tsx scripts/config-diagnostics.ts",
-    "config:check-env": "tsx scripts/check-env-example.ts",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",
     "demo:pool-asset": "tsx scripts/demo-pool-asset.ts"
   },
   "dependencies": {
