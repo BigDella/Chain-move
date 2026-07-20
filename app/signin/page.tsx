@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useIdentityToken, usePrivy } from "@privy-io/react-auth"
 import { AlertCircle, ArrowRight, Car, Loader2, TrendingUp } from "lucide-react"
 
 import { AuthLayout } from "@/components/auth/AuthLayout"
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { resolvePrivyAccessToken } from "@/lib/auth/privy-client"
+import { useIdentityToken, usePrivy } from "@/lib/privy/react-auth"
 
 type UserRole = "driver" | "investor"
 

@@ -1,31 +1,17 @@
 "use client"
 
 import type { FC, ReactNode } from "react"
-import { PrivyProvider } from "@privy-io/react-auth"
-import { liskSepolia } from "viem/chains"
+
+import { PrivyProvider } from "@/lib/privy/react-auth"
+import { embeddedWalletProviderConfig } from "@/lib/wallet/config"
 
 const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID
 
 export const Providers: FC<{ children: ReactNode }> = ({ children }) => {
   return (
     <PrivyProvider
-      appId={privyAppId ?? ""}
-      config={{
-        loginMethods: ["email", "sms"],
-        supportedChains: [liskSepolia],
-        defaultChain: liskSepolia,
-        embeddedWallets: {
-          ethereum: {
-            createOnLogin: "all-users",
-          },
-          showWalletUIs: true,
-        },
-        appearance: {
-          theme: "light",
-          accentColor: "#F2780E",
-          logo: "/images/chainmovelogo.png",
-        },
-      }}
+      appId={privyAppId || ""}
+      config={embeddedWalletProviderConfig}
     >
       {children}
     </PrivyProvider>

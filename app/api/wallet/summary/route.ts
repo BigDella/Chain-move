@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server"
-import { getAuthenticatedUser, withSessionRefresh } from "@/lib/auth/current-user"
+import { withSessionRefresh } from "@/lib/auth/current-user"
+import { authorizeRequest } from "@/lib/authorization/route"
 import Transaction from "@/models/Transaction"
 
 export async function GET(request: Request) {
   try {
-    const { user, shouldRefreshSession } = await getAuthenticatedUser(request)
-    if (!user) {
-      return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
-    }
+    const auth = await authorizeRequest(request, "wallet:read", user => Promise.resolve({ type: "wallet", ownerId: user._id.toString() }))
+    if ("response" in auth) return auth.response
+    const { user, shouldRefreshSession } = auth
 
     const transactions = await Transaction.find({
       userId: user._id,

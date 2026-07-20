@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { finalizeAuthenticatedResponse, requireAuthenticatedUser } from "@/lib/api/route-guard"
+import { finalizeAuthenticatedResponse } from "@/lib/api/route-guard"
+import { authorizeRequest } from "@/lib/authorization/route"
 import { parseSearchParams } from "@/lib/api/validation"
 import dbConnect from "@/lib/dbConnect"
 import {
@@ -22,18 +23,6 @@ function sanitizeFilename(filename: string) {
 
 export async function GET(request: Request) {
   try {
-    const authContext = await requireAuthenticatedUser(request, ["admin", "driver", "investor"])
-    if ("response" in authContext) return authContext.response
-
-    const rateLimit = consumeRateLimit({
-      key: buildRateLimitKey("kyc-document", authContext.user._id.toString(), getClientIpAddress(request)),
-      limit: 60,
-      windowMs: 10 * 60 * 1000,
-    })
-    if (!rateLimit.allowed) {
-      return rateLimitExceededResponse(rateLimit)
-    }
-
     const query = parseSearchParams(request, querySchema)
     if ("response" in query) return query.response
 
@@ -41,20 +30,21 @@ export async function GET(request: Request) {
 
     await dbConnect()
 
-    const documentOwnerExists = await User.exists({
+    const documentOwner = await User.findOne({
       kycDocuments: reference,
+    }).select("_id").lean()
+
+    const authContext = await authorizeRequest(request, "kyc:document:read", {
+      type: "kyc", ownerId: documentOwner?._id?.toString(), exists: Boolean(documentOwner),
     })
+    if ("response" in authContext) return authContext.response
 
-    if (!documentOwnerExists) {
-      return NextResponse.json({ message: "Document not found." }, { status: 404 })
-    }
-
-    if (authContext.user.role !== "admin") {
-      const ownsDocument = Array.isArray(authContext.user.kycDocuments) && authContext.user.kycDocuments.includes(reference)
-      if (!ownsDocument) {
-        return NextResponse.json({ message: "You do not have access to this document." }, { status: 403 })
-      }
-    }
+    const rateLimit = consumeRateLimit({
+      key: buildRateLimitKey("kyc-document", authContext.user._id.toString(), getClientIpAddress(request)),
+      limit: 60,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rateLimit.allowed) return rateLimitExceededResponse(rateLimit)
 
     const secureReference = parseKycDocumentReference(reference)
     const rawBlobUrl = secureReference?.url || reference
@@ -82,7 +72,7 @@ export async function GET(request: Request) {
       body = Buffer.from(await upstreamResponse.arrayBuffer())
     }
 
-    const response = new NextResponse(body, {
+    const response = new NextResponse(body as any, {
       status: 200,
       headers: {
         "Cache-Control": "private, no-store, max-age=0",

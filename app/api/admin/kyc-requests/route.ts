@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
-import { finalizeAuthenticatedResponse, requireAuthenticatedUser } from "@/lib/api/route-guard"
+import { finalizeAuthenticatedResponse } from "@/lib/api/route-guard"
+import { authorizeRequest } from "@/lib/authorization/route"
 import dbConnect from "@/lib/dbConnect"
 import User from "@/models/User"
 
@@ -8,9 +9,7 @@ export async function GET(request: Request) {
   try {
     await dbConnect()
 
-    const authContext = await requireAuthenticatedUser(request, ["admin"], {
-      forbiddenMessage: "Admin access required",
-    })
+    const authContext = await authorizeRequest(request, "kyc:review", { type: "kyc" })
     if ("response" in authContext) return authContext.response
 
     const kycRequests = await User.find({ role: { $in: ["driver", "investor"] } })

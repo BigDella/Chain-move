@@ -9,6 +9,7 @@ export interface UserProfileSnapshot {
   bio: string | null
   role: string
   walletAddress: string | null
+  stellarPublicKey: string | null
   availableBalance: number
   totalInvested: number
   totalReturns: number
@@ -16,7 +17,7 @@ export interface UserProfileSnapshot {
 }
 
 export const USER_PROFILE_SELECT =
-  "name fullName email phoneNumber privyUserId address bio role walletAddress walletaddress availableBalance totalInvested totalReturns createdAt"
+  "name fullName email phoneNumber privyUserId address bio role walletAddress walletaddress stellarPublicKey availableBalance totalInvested totalReturns createdAt"
 
 export function resolveUserDisplayName(user: {
   name?: string | null
@@ -52,6 +53,7 @@ export function toUserProfileSnapshot(user: any): UserProfileSnapshot {
     bio: user.bio || null,
     role: user.role,
     walletAddress: resolveUserWalletAddress(user),
+    stellarPublicKey: user.stellarPublicKey || null,
     availableBalance: Number(user.availableBalance || 0),
     totalInvested: Number(user.totalInvested || 0),
     totalReturns: Number(user.totalReturns || 0),
