@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { finalizeAuthenticatedResponse, requireAuthenticatedUser } from "@/lib/api/route-guard"
+import { finalizeAuthenticatedResponse } from "@/lib/api/route-guard"
+import { authorizeRequest } from "@/lib/authorization/route"
 import { parseSearchParams } from "@/lib/api/validation"
 import dbConnect from "@/lib/dbConnect"
 import {
@@ -27,18 +28,6 @@ function sanitizeFilename(filename: string) {
 
 export async function GET(request: Request) {
   try {
-    const authContext = await requireAuthenticatedUser(request, ["admin", "driver", "investor"])
-    if ("response" in authContext) return authContext.response
-
-    const rateLimit = consumeRateLimit({
-      key: buildRateLimitKey("kyc-document", authContext.user._id.toString(), getClientIpAddress(request)),
-      limit: 60,
-      windowMs: 10 * 60 * 1000,
-    })
-    if (!rateLimit.allowed) {
-      return rateLimitExceededResponse(rateLimit)
-    }
-
     const query = parseSearchParams(request, querySchema)
     if ("response" in query) return query.response
 
@@ -83,6 +72,21 @@ export async function GET(request: Request) {
         }
       }
     }
+    const documentOwner = await User.findOne({
+      kycDocuments: reference,
+    }).select("_id").lean()
+
+    const authContext = await authorizeRequest(request, "kyc:document:read", {
+      type: "kyc", ownerId: documentOwner?._id?.toString(), exists: Boolean(documentOwner),
+    })
+    if ("response" in authContext) return authContext.response
+
+    const rateLimit = consumeRateLimit({
+      key: buildRateLimitKey("kyc-document", authContext.user._id.toString(), getClientIpAddress(request)),
+      limit: 60,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rateLimit.allowed) return rateLimitExceededResponse(rateLimit)
 
     let docRecord: any = null
     let rawBlobUrl: string

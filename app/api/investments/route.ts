@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 
-import { finalizeAuthenticatedResponse, requireAuthenticatedUser } from "@/lib/api/route-guard"
+import { finalizeAuthenticatedResponse } from "@/lib/api/route-guard"
+import { authorizeRequest } from "@/lib/authorization/route"
 import { parseSearchParams } from "@/lib/api/validation"
 import dbConnect from "@/lib/dbConnect"
 import Investment from "@/models/Investment"
@@ -12,20 +13,18 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   try {
-    const authContext = await requireAuthenticatedUser(request, ["admin", "investor"], {
-      forbiddenMessage: "Investor or admin access required",
-    })
-    if ("response" in authContext) return authContext.response
-
     const query = parseSearchParams(request, querySchema)
     if ("response" in query) return query.response
 
     await dbConnect()
 
-    const investorId =
-      authContext.user.role === "admin" && query.data.investorId
-        ? query.data.investorId
-        : authContext.user._id.toString()
+    const authContext = await authorizeRequest(request, "investment:read", user => Promise.resolve({
+      type: "investment",
+      ownerId: user.role === "admin" && query.data.investorId ? query.data.investorId : user._id.toString(),
+    }))
+    if ("response" in authContext) return authContext.response
+
+    const investorId = authContext.user.role === "admin" && query.data.investorId ? query.data.investorId : authContext.user._id.toString()
 
     const filter = authContext.user.role === "admin" && !query.data.investorId ? {} : { investorId }
 
