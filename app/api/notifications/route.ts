@@ -8,10 +8,12 @@ import Notification from "@/models/Notification"
 import User from "@/models/User"
 import { logAuditEvent } from "@/lib/security/audit-log"
 import { buildRateLimitKey, consumeRateLimit, getClientIpAddress, rateLimitExceededResponse } from "@/lib/security/rate-limit"
+import { decodeCursor, encodeCursor } from "@/lib/api/cursor"
 
 const querySchema = z.object({
   userId: z.string().trim().regex(/^[a-f\d]{24}$/i, "Invalid userId.").optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().max(1000).optional(),
 })
 
 const bodySchema = z.object({
@@ -111,11 +113,23 @@ export async function GET(request: Request) {
         ? query.data.userId
         : authContext.user._id.toString()
 
-    const notifications = await Notification.find({ userId: targetUserId })
-      .sort({ timestamp: -1 })
-      .limit(query.data.limit)
+    const scope = `notifications:${targetUserId}`
+    let cursor
+    try { cursor = decodeCursor(query.data.cursor, scope) }
+    catch { return NextResponse.json({ error: "Invalid or expired cursor" }, { status: 400 }) }
+    const notificationFilter: Record<string, unknown> = { userId: targetUserId }
+    if (cursor) notificationFilter.$or = [{ timestamp: { $lt: cursor.timestamp } }, { timestamp: cursor.timestamp, _id: { $lt: cursor.id } }]
+    const notifications = await Notification.find(notificationFilter)
+      .select("title message type priority link read timestamp")
+      .sort({ timestamp: -1, _id: -1 })
+      .limit(query.data.limit + 1).maxTimeMS(1000).lean()
 
-    const response = NextResponse.json({ success: true, notifications })
+    const hasMore = notifications.length > query.data.limit
+    const page = notifications.slice(0, query.data.limit)
+    const last = page.at(-1)
+    const nextCursor = hasMore && last ? encodeCursor({ timestamp: last.timestamp, id: String(last._id) }, scope) : null
+
+    const response = NextResponse.json({ success: true, notifications: page, nextCursor })
     return finalizeAuthenticatedResponse(response, authContext)
   } catch (error) {
     console.error("NOTIFICATIONS_GET_ERROR", error)

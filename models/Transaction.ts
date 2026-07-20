@@ -72,4 +72,7 @@ const TransactionSchema: Schema = new Schema({
   timestamp: { type: Date, default: Date.now },
 })
 
+TransactionSchema.index({ userId: 1, userType: 1, timestamp: -1, _id: -1 })
+TransactionSchema.index({ userId: 1, type: 1, timestamp: -1, _id: -1 })
+
 export default mongoose.models.Transaction || mongoose.model<ITransaction>("Transaction", TransactionSchema)
