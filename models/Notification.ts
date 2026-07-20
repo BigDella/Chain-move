@@ -38,5 +38,6 @@ const NotificationSchema: Schema = new Schema({
   timestamp: { type: Date, default: Date.now, index: true },
 })
 
-export default (mongoose.models.Notification ||
-  mongoose.model<INotification>("Notification", NotificationSchema)) as mongoose.Model<{ _id: any; [key: string]: any }>;
+NotificationSchema.index({ userId: 1, timestamp: -1, _id: -1 })
+
+export default mongoose.models.Notification || mongoose.model<INotification>("Notification", NotificationSchema)
