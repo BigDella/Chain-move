@@ -86,7 +86,12 @@ enum DataKey {
     Pool(u64),
     InvestorPosition(u64, Address),
     Reference(String),
+    LegacyPool(u64), // Legacy key format for migration testing
 }
+
+const DAY_IN_LEDGERS: u32 = 17280;
+const RENT_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+const RENT_EXTEND_TO: u32 = 30 * DAY_IN_LEDGERS;
 
 #[contractimpl]
 impl ChainMovePoolContract {
@@ -101,6 +106,7 @@ impl ChainMovePoolContract {
         target_amount: i128,
     ) -> Result<Pool, ContractError> {
         owner.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool_id == 0 || total_units == 0 || target_amount <= 0 || asset_label.is_empty() {
             return Err(ContractError::InvalidInput);
@@ -126,6 +132,7 @@ impl ChainMovePoolContract {
         };
 
         env.storage().persistent().set(&key, &pool);
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         Ok(pool)
     }
@@ -139,6 +146,7 @@ impl ChainMovePoolContract {
         reference: String,
     ) -> Result<InvestorPosition, ContractError> {
         investor.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool_id == 0 || amount <= 0 || reference.is_empty() {
             return Err(ContractError::InvalidInput);
@@ -161,6 +169,7 @@ impl ChainMovePoolContract {
             .persistent()
             .get(&pool_key)
             .ok_or(ContractError::PoolNotFound)?;
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if !pool.active {
             return Err(ContractError::PoolInactive);
@@ -186,6 +195,7 @@ impl ChainMovePoolContract {
         pool.total_invested = new_total;
         pool.funded_units = new_units;
         env.storage().persistent().set(&pool_key, &pool);
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         let position_key = DataKey::InvestorPosition(pool_id, investor.clone());
         let mut position =
@@ -204,6 +214,7 @@ impl ChainMovePoolContract {
         position.invested = checked_add_i128(position.invested, amount)?;
         position.units = checked_add_u64(position.units, units)?;
         env.storage().persistent().set(&position_key, &position);
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         write_reference(
             &env,
@@ -236,6 +247,7 @@ impl ChainMovePoolContract {
         reference: String,
     ) -> Result<InvestorPosition, ContractError> {
         payer.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool_id == 0 || amount <= 0 || reference.is_empty() {
             return Err(ContractError::InvalidInput);
@@ -258,6 +270,7 @@ impl ChainMovePoolContract {
             .persistent()
             .get(&pool_key)
             .ok_or(ContractError::PoolNotFound)?;
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool.asset != asset {
             return Err(ContractError::WrongAsset);
@@ -273,6 +286,7 @@ impl ChainMovePoolContract {
             .persistent()
             .get(&position_key)
             .ok_or(ContractError::InvestorPositionNotFound)?;
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         let outstanding = position
             .invested
@@ -288,7 +302,9 @@ impl ChainMovePoolContract {
         position.repaid = checked_add_i128(position.repaid, amount)?;
 
         env.storage().persistent().set(&pool_key, &pool);
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
         env.storage().persistent().set(&position_key, &position);
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         write_reference(
             &env,
@@ -320,6 +336,7 @@ impl ChainMovePoolContract {
         reference: String,
     ) -> Result<InvestorPosition, ContractError> {
         owner.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool_id == 0 || amount <= 0 || reference.is_empty() {
             return Err(ContractError::InvalidInput);
@@ -342,6 +359,7 @@ impl ChainMovePoolContract {
             .persistent()
             .get(&pool_key)
             .ok_or(ContractError::PoolNotFound)?;
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool.owner != owner {
             return Err(ContractError::InvalidInput);
@@ -353,6 +371,7 @@ impl ChainMovePoolContract {
             .persistent()
             .get(&position_key)
             .ok_or(ContractError::InvestorPositionNotFound)?;
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if amount > position.invested {
             return Err(ContractError::NothingToRefund);
@@ -366,8 +385,11 @@ impl ChainMovePoolContract {
         position.units = checked_sub_u64(position.units, refund_units)?;
         pool.total_invested = checked_sub_i128(pool.total_invested, amount)?;
         pool.funded_units = checked_sub_u64(pool.funded_units, refund_units)?;
+        
         env.storage().persistent().set(&pool_key, &pool);
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
         env.storage().persistent().set(&position_key, &position);
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         write_reference(
             &env,
@@ -393,6 +415,7 @@ impl ChainMovePoolContract {
     /// Marks a pool inactive so no further funding is accepted.
     pub fn close_pool(env: Env, owner: Address, pool_id: u64) -> Result<Pool, ContractError> {
         owner.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if pool_id == 0 {
             return Err(ContractError::InvalidInput);
@@ -411,6 +434,7 @@ impl ChainMovePoolContract {
 
         pool.active = false;
         env.storage().persistent().set(&key, &pool);
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
         Ok(pool)
     }
 
@@ -419,10 +443,28 @@ impl ChainMovePoolContract {
             return Err(ContractError::InvalidInput);
         }
 
-        env.storage()
+        let key = DataKey::Pool(pool_id);
+        let legacy_key = DataKey::LegacyPool(pool_id);
+
+        if !env.storage().persistent().has(&key) && env.storage().persistent().has(&legacy_key) {
+            // Found a legacy key! Migrate it to the new key representation
+            let pool: Pool = env
+                .storage()
+                .persistent()
+                .get(&legacy_key)
+                .ok_or(ContractError::PoolNotFound)?;
+            env.storage().persistent().set(&key, &pool);
+            env.storage().persistent().remove(&legacy_key);
+        }
+
+        let pool: Pool = env
+            .storage()
             .persistent()
-            .get(&DataKey::Pool(pool_id))
-            .ok_or(ContractError::PoolNotFound)
+            .get(&key)
+            .ok_or(ContractError::PoolNotFound)?;
+
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        Ok(pool)
     }
 
     pub fn read_investor_position(
@@ -434,10 +476,15 @@ impl ChainMovePoolContract {
             return Err(ContractError::InvalidInput);
         }
 
-        env.storage()
+        let key = DataKey::InvestorPosition(pool_id, investor);
+        let position: InvestorPosition = env
+            .storage()
             .persistent()
-            .get(&DataKey::InvestorPosition(pool_id, investor))
-            .ok_or(ContractError::InvestorPositionNotFound)
+            .get(&key)
+            .ok_or(ContractError::InvestorPositionNotFound)?;
+
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        Ok(position)
     }
 
     /// Returns investor share in basis points (bps): invested * 10_000 / target_amount.
@@ -450,17 +497,21 @@ impl ChainMovePoolContract {
             return Err(ContractError::InvalidInput);
         }
 
+        let pool_key = DataKey::Pool(pool_id);
         let pool: Pool = env
             .storage()
             .persistent()
-            .get(&DataKey::Pool(pool_id))
+            .get(&pool_key)
             .ok_or(ContractError::PoolNotFound)?;
+        env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
+        let position_key = DataKey::InvestorPosition(pool_id, investor);
         let position: InvestorPosition = env
             .storage()
             .persistent()
-            .get(&DataKey::InvestorPosition(pool_id, investor))
+            .get(&position_key)
             .ok_or(ContractError::InvestorPositionNotFound)?;
+        env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         let numerator = position
             .invested
@@ -484,6 +535,7 @@ fn read_idempotent_position(
         .persistent()
         .get::<DataKey, OperationReceipt>(&key)
     {
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
         if receipt.kind != kind
             || receipt.pool_id != pool_id
             || receipt.participant != participant
@@ -492,11 +544,13 @@ fn read_idempotent_position(
             return Err(ContractError::DuplicateReference);
         }
 
+        let pos_key = DataKey::InvestorPosition(pool_id, participant);
         let position = env
             .storage()
             .persistent()
-            .get(&DataKey::InvestorPosition(pool_id, participant))
+            .get(&pos_key)
             .ok_or(ContractError::InvestorPositionNotFound)?;
+        env.storage().persistent().extend_ttl(&pos_key, RENT_THRESHOLD, RENT_EXTEND_TO);
         return Ok(Some(position));
     }
 
@@ -511,8 +565,9 @@ fn write_reference(
     participant: Address,
     amount: i128,
 ) {
+    let key = DataKey::Reference(reference);
     env.storage().persistent().set(
-        &DataKey::Reference(reference),
+        &key,
         &OperationReceipt {
             kind,
             pool_id,
@@ -520,6 +575,7 @@ fn write_reference(
             amount,
         },
     );
+    env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 }
 
 fn allocate_units(pool: &Pool, amount: i128, new_total: i128) -> Result<u64, ContractError> {

@@ -4,6 +4,7 @@ import User from '../../models/User';
 describe('User Model - Stellar Fields', () => {
   beforeAll(async () => {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/chainmove-test');
+    await User.init();
   });
 
   afterAll(async () => {

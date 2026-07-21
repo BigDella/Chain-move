@@ -423,3 +423,70 @@ fn conservation_of_value_holds_across_funding_refund_and_repayment() {
 
     assert_eq!(observed_supply, initial_supply);
 }
+
+#[test]
+fn test_ttl_and_legacy_key_migration() {
+    use soroban_sdk::testutils::storage::Persistent;
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(ChainMovePoolContract, ());
+    let client = ChainMovePoolContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let repayer = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let pool_id: u64 = 999;
+    let units: u64 = 100;
+    let target: i128 = 10_000;
+
+    // Create pool
+    client.create_pool(
+        &owner,
+        &repayer,
+        &pool_id,
+        &asset,
+        &String::from_str(&env, "pool-999"),
+        &units,
+        &target,
+    );
+
+    // Verify TTL was set and is accessible
+    env.as_contract(&contract_id, || {
+        let key = super::DataKey::Pool(pool_id);
+        let ttl = env.storage().persistent().get_ttl(&key);
+        assert!(ttl > 0);
+    });
+
+    // Test legacy key migration
+    let pool_data = client.read_pool(&pool_id);
+    let legacy_pool_id: u64 = 888;
+    let mut legacy_pool = pool_data;
+    legacy_pool.id = legacy_pool_id;
+
+    env.as_contract(&contract_id, || {
+        let legacy_key = super::DataKey::LegacyPool(legacy_pool_id);
+        env.storage().persistent().set(&legacy_key, &legacy_pool);
+        assert!(env.storage().persistent().has(&legacy_key));
+        
+        let new_key = super::DataKey::Pool(legacy_pool_id);
+        assert!(!env.storage().persistent().has(&new_key));
+    });
+
+    // Call read_pool on the legacy pool id - it should migrate the legacy key to the new key representation
+    let read_migrated = client.read_pool(&legacy_pool_id);
+    assert_eq!(read_migrated.id, legacy_pool_id);
+
+    // Verify that the legacy key was deleted and the new key exists
+    env.as_contract(&contract_id, || {
+        let legacy_key = super::DataKey::LegacyPool(legacy_pool_id);
+        assert!(!env.storage().persistent().has(&legacy_key));
+
+        let new_key = super::DataKey::Pool(legacy_pool_id);
+        assert!(env.storage().persistent().has(&new_key));
+
+        let ttl = env.storage().persistent().get_ttl(&new_key);
+        assert!(ttl > 0);
+    });
+}
+
