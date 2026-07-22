@@ -4,24 +4,29 @@ import { z } from "zod"
 
 import { finalizeAuthenticatedResponse, requireAuthenticatedUser } from "@/lib/api/route-guard"
 import { parseSearchParams } from "@/lib/api/validation"
+import dbConnect from "@/lib/dbConnect"
 import {
   createKycDocumentReference,
   encryptKycDocument,
 } from "@/lib/security/kyc-documents"
+import { validateKycFile, KYC_ALLOWED_MIME_TYPES, KYC_MAX_FILE_SIZE } from "@/lib/security/kyc-file-validation"
+import { runScanHook } from "@/lib/security/kyc-scanning"
+import { computeRetentionExpiry } from "@/lib/security/kyc-retention"
+import { logAuditEvent } from "@/lib/security/audit-log"
 import {
   buildRateLimitKey,
   consumeRateLimit,
   getClientIpAddress,
   rateLimitExceededResponse,
 } from "@/lib/security/rate-limit"
+import KycDocument from "@/models/KycDocument"
 
-const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
-const KYC_ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"])
 const VEHICLE_ALLOWED_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp"])
 
 const querySchema = z.object({
   filename: z.string().trim().min(1).max(200),
   scope: z.enum(["kyc", "vehicle"]),
+  documentType: z.enum(["identity", "proof_of_address", "bvn", "nin", "other"]).optional(),
 })
 
 function sanitizeFilename(filename: string) {
@@ -63,12 +68,12 @@ export async function POST(request: Request) {
       return rateLimitExceededResponse(rateLimit)
     }
 
-    const allowedContentTypes = scope === "vehicle" ? VEHICLE_ALLOWED_CONTENT_TYPES : KYC_ALLOWED_CONTENT_TYPES
+    const allowedContentTypes = scope === "vehicle" ? VEHICLE_ALLOWED_CONTENT_TYPES : KYC_ALLOWED_MIME_TYPES
     if (!allowedContentTypes.has(contentType)) {
       return NextResponse.json({ message: "Unsupported file type." }, { status: 400 })
     }
 
-    if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_SIZE_BYTES) {
+    if (Number.isFinite(contentLength) && contentLength > KYC_MAX_FILE_SIZE) {
       return NextResponse.json({ message: "File is too large." }, { status: 413 })
     }
 
@@ -77,11 +82,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "No file body provided." }, { status: 400 })
     }
 
-    if (fileBuffer.length > MAX_UPLOAD_SIZE_BYTES) {
+    if (fileBuffer.length > KYC_MAX_FILE_SIZE) {
       return NextResponse.json({ message: "File is too large." }, { status: 413 })
     }
 
     if (scope === "kyc") {
+      const validation = validateKycFile(fileBuffer, contentType, filename)
+      if (!validation.valid) {
+        await logAuditEvent({
+          actor: authContext.user,
+          action: "kyc.document.upload.rejected",
+          targetType: "user",
+          targetId: authContext.user._id?.toString(),
+          status: "failure",
+          ipAddress: getClientIpAddress(request),
+          metadata: { filename, errors: validation.errors },
+        })
+        return NextResponse.json(
+          { message: "File validation failed.", errors: validation.errors },
+          { status: 400 },
+        )
+      }
+
+      await dbConnect()
+
       const encryptedPayload = encryptKycDocument(fileBuffer, {
         contentType,
         originalFilename: filename,
@@ -94,13 +118,60 @@ export async function POST(request: Request) {
         contentType: "application/json",
       })
 
+      const encryptedRef = createKycDocumentReference({
+        url: blob.url,
+        originalFilename: filename,
+        contentType,
+      })
+
+      const retentionExpiry = computeRetentionExpiry(new Date())
+
+      const documentType = query.data.documentType || "other"
+
+      const kycDoc = await KycDocument.create({
+        userId: authContext.user._id,
+        documentType,
+        status: "pending",
+        storageKey,
+        blobUrl: blob.url,
+        encryptedRef,
+        originalFilename: filename,
+        sanitizedFilename: filename,
+        contentType,
+        fileSize: fileBuffer.length,
+        checksumSha256: validation.checksumSha256,
+        encryptionKeyVersion: "kyc-v1",
+        scanVerdict: "pending",
+        retentionExpiresAt: retentionExpiry,
+        legalHold: false,
+        accessCount: 0,
+      })
+
+      await runScanHook(kycDoc._id.toString(), fileBuffer, {
+        filename,
+        contentType,
+        checksumSha256: validation.checksumSha256,
+      })
+
+      await logAuditEvent({
+        actor: authContext.user,
+        action: "kyc.document.upload",
+        targetType: "kyc_document",
+        targetId: kycDoc._id.toString(),
+        metadata: {
+          filename,
+          documentType,
+          contentType,
+          fileSize: fileBuffer.length,
+          checksumSha256: validation.checksumSha256,
+        },
+      })
+
       const response = NextResponse.json({
         success: true,
-        documentRef: createKycDocumentReference({
-          url: blob.url,
-          originalFilename: filename,
-          contentType,
-        }),
+        documentId: kycDoc._id.toString(),
+        documentRef: encryptedRef,
+        status: kycDoc.status,
       })
 
       return finalizeAuthenticatedResponse(response, authContext)
