@@ -11,7 +11,13 @@
     "typecheck": "tsc --noEmit",
     "start": "next start",
     "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
-    "demo:pool-asset": "tsx scripts/demo-pool-asset.ts"
+    "demo:pool-asset": "tsx scripts/demo-pool-asset.ts",
+    "backup": "tsx scripts/backup/run-backup.ts",
+    "backup:list": "tsx scripts/backup/run-backup.ts --list",
+    "backup:drill": "tsx scripts/backup/run-drill.ts",
+    "restore": "tsx scripts/backup/run-restore.ts",
+    "restore:verify": "tsx scripts/backup/run-restore.ts --verify-only",
+    "restore:token": "tsx scripts/backup/run-restore.ts --generate-token"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
