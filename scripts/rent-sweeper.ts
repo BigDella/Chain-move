@@ -118,14 +118,14 @@ async function runSweeper() {
         const contractKey = xdr.LedgerKey.contractData(new xdr.LedgerKeyContractData({
           contract: Address.fromString(contractId).toScAddress(),
           key: xdr.ScVal.scvSymbol("Admin"), // Instance properties are tied to the instance
-          durability: xdr.ContractDataDurability.instance()
+          durability: (xdr.ContractDataDurability as any).instance ? (xdr.ContractDataDurability as any).instance() : (xdr.ContractDataDurability as any).Instance ?? (xdr.ContractDataDurability as any).persistent?.()
         }));
 
         const response = await rpcServer.getLedgerEntries(contractKey);
         
         if (response.entries && response.entries.length > 0) {
           const entry = response.entries[0];
-          const liveUntilLedger = entry.liveUntilLedgerSeq;
+          const liveUntilLedger = entry.liveUntilLedgerSeq ?? 0;
           const latestLedger = await getLatestLedgerSeq(rpcServer);
           const currentTtl = liveUntilLedger - latestLedger;
 
@@ -176,9 +176,9 @@ async function runSweeper() {
                 // Normally simulation sets this. We simulate the transaction first.
                 const simResponse = await rpcServer.simulateTransaction(tx);
                 if (rpc.Api.isSimulationSuccess(simResponse)) {
-                  const preparedTx = rpc.assembleTransaction(tx, simResponse);
+                  const preparedTx: any = rpc.assembleTransaction(tx, simResponse);
                   preparedTx.sign(operatorKeypair);
-                  const sendResponse = await rpcServer.sendTransaction(preparedTx);
+                  const sendResponse: any = await rpcServer.sendTransaction(preparedTx);
                   
                   if (sendResponse.status !== "PENDING" && sendResponse.status !== "SUCCESS") {
                     throw new Error(`RPC send failed: ${sendResponse.status}`);

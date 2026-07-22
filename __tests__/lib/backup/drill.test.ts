@@ -5,7 +5,7 @@ import mongoose from "mongoose"
 import { performBackup } from "@/lib/backup/backup"
 import { performRestore } from "@/lib/backup/restore"
 import { verifyBackupIntegrity, verifyRestoredDatabase } from "@/lib/backup/verify"
-import { generateFixtures, cleanupFixtures } from "../../scripts/backup/generate-fixtures"
+import { generateFixtures, cleanupFixtures } from "@/scripts/backup/generate-fixtures"
 
 const TEST_URI = process.env.MONGODB_URI || "mongodb://localhost:27017/chainmove-drill-test"
 const DRILL_DIR = join(process.cwd(), "backups", ".drill-test")
@@ -26,7 +26,7 @@ afterEach(async () => {
 describe("restore drill (integration)", () => {
   it("generates fixtures, backs up, restores, and verifies", async () => {
     const conn = await mongoose.connect(TEST_URI, { bufferCommands: false })
-    const db = conn.db!
+    const db = conn.connection.db || (conn as any).db
     if (!db) throw new Error("No DB")
 
     try {
@@ -75,7 +75,7 @@ describe("restore drill (integration)", () => {
 
   it("detects wrong key during restore", async () => {
     const conn = await mongoose.connect(TEST_URI, { bufferCommands: false })
-    const db = conn.db!
+    const db = (conn as any).connection?.db || (conn as any).db
     if (!db) throw new Error("No DB")
 
     try {
@@ -107,7 +107,7 @@ describe("restore drill (integration)", () => {
 
   it("detects corrupted archive", async () => {
     const conn = await mongoose.connect(TEST_URI, { bufferCommands: false })
-    const db = conn.db!
+    const db = (conn as any).connection?.db || (conn as any).db
     if (!db) throw new Error("No DB")
 
     try {
@@ -149,7 +149,7 @@ describe("restore drill (integration)", () => {
 
   it("rejects unsafe production target", async () => {
     const conn = await mongoose.connect(TEST_URI, { bufferCommands: false })
-    const db = conn.db!
+    const db = (conn as any).connection?.db || (conn as any).db
     if (!db) throw new Error("No DB")
 
     try {
@@ -188,7 +188,7 @@ describe("restore drill (integration)", () => {
 
   it("verifies restored database document counts", async () => {
     const conn = await mongoose.connect(TEST_URI, { bufferCommands: false })
-    const db = conn.db!
+    const db = (conn as any).connection?.db || (conn as any).db
     if (!db) throw new Error("No DB")
 
     try {

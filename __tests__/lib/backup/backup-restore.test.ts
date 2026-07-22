@@ -43,17 +43,19 @@ async function seedTestData(db: mongoose.Connection["db"]) {
 }
 
 describe("backup/backup", () => {
-  let connection: typeof mongoose
+  let connection: any
 
   beforeEach(async () => {
     connection = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
-    await seedTestData(connection.db!)
+    const db = connection.connection?.db || connection.db
+    await seedTestData(db)
   })
 
   afterEach(async () => {
-    if (connection.db) {
-      await connection.db.collection("users").deleteMany({})
-      await connection.db.collection("vehicles").deleteMany({})
+    const db = connection.connection?.db || connection.db
+    if (db) {
+      await db.collection("users").deleteMany({})
+      await db.collection("vehicles").deleteMany({})
     }
     await connection.disconnect()
   })
@@ -221,8 +223,8 @@ describe("backup/restore", () => {
   })
 
   it("fails with wrong encryption key", async () => {
-    const conn = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
-    await seedTestData(conn.db!)
+    const conn: any = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
+    await seedTestData(conn.connection?.db || conn.db)
 
     const { backupPath } = await performBackup({
       backupDir: TEST_BACKUP_DIR,
@@ -245,8 +247,8 @@ describe("backup/restore", () => {
   })
 
   it("dry run reports what would be restored", async () => {
-    const conn = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
-    await seedTestData(conn.db!)
+    const conn: any = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
+    await seedTestData(conn.connection?.db || conn.db)
 
     const { backupPath } = await performBackup({
       backupDir: TEST_BACKUP_DIR,
@@ -270,17 +272,19 @@ describe("backup/restore", () => {
 })
 
 describe("backup/verify", () => {
-  let connection: typeof mongoose
+  let connection: any
 
   beforeEach(async () => {
     connection = await mongoose.connect(TEST_DB_URI, { bufferCommands: false })
-    await seedTestData(connection.db!)
+    const db = connection.connection?.db || connection.db
+    await seedTestData(db)
   })
 
   afterEach(async () => {
-    if (connection.db) {
-      await connection.db.collection("users").deleteMany({})
-      await connection.db.collection("vehicles").deleteMany({})
+    const db = connection.connection?.db || connection.db
+    if (db) {
+      await db.collection("users").deleteMany({})
+      await db.collection("vehicles").deleteMany({})
     }
     await connection.disconnect()
   })
