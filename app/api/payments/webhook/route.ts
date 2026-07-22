@@ -43,7 +43,17 @@ export async function POST(request: Request) {
   }
 
   const event = JSON.parse(body)
-  if (event.event !== "charge.success") {
+  const eventName = event.event as string
+  const supportedEvents = [
+    "charge.success",
+    "charge.failed",
+    "refund.processed",
+    "transfer.reversed",
+    "charge.dispute.create",
+    "charge.dispute.resolve",
+  ]
+
+  if (!supportedEvents.includes(eventName)) {
     return NextResponse.json({ status: "ignored" }, { status: 200 })
   }
 
