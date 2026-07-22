@@ -157,7 +157,7 @@ export async function verifyRestoredDatabase(
     collectionResults: {},
   }
 
-  let connection: typeof mongoose | null = null
+  let connection: mongoose.Connection | null = null
 
   try {
     connection = await mongoose.createConnection(targetUri, {

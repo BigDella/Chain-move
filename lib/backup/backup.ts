@@ -61,7 +61,7 @@ export async function performBackup(options: BackupOptions): Promise<{
   const collectionInfos: CollectionInfo[] = []
   let totalSizeBytes = 0
 
-  const availableCollections = await db.listCollections()
+  const availableCollections = await db.listCollections().toArray()
   const availableNames = new Set(availableCollections.map((c) => c.name))
 
   for (const collName of collectionsToBackup) {
@@ -71,7 +71,7 @@ export async function performBackup(options: BackupOptions): Promise<{
 
     const collection = db.collection(collName)
     const documents = await collection.find({}).toArray()
-    const indexes = await getCollectionIndexes(collection)
+    const indexes = await getCollectionIndexes(collection as any)
 
     const collectionInfo: CollectionInfo = {
       name: collName,

@@ -122,7 +122,7 @@ export async function performRestore(options: RestoreOptions): Promise<{
     }
   }
 
-  let restoreConnection: typeof mongoose | null = null
+  let restoreConnection: mongoose.Connection | null = null
 
   try {
     restoreConnection = await mongoose.createConnection(targetUri, {

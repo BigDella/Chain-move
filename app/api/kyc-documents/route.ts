@@ -35,6 +35,15 @@ export async function GET(request: Request) {
 
     await dbConnect()
 
+    const documentOwner = await User.findOne({
+      kycDocuments: reference,
+    }).select("_id").lean()
+
+    const authContext = await authorizeRequest(request, "kyc:document:read", {
+      type: "kyc", ownerId: documentOwner?._id?.toString(), exists: Boolean(documentOwner),
+    })
+    if ("response" in authContext) return authContext.response
+
     if (query.data.token) {
       const verification = verifySignedDocumentUrl(query.data.token)
       if (!verification.valid) {
@@ -72,14 +81,6 @@ export async function GET(request: Request) {
         }
       }
     }
-    const documentOwner = await User.findOne({
-      kycDocuments: reference,
-    }).select("_id").lean()
-
-    const authContext = await authorizeRequest(request, "kyc:document:read", {
-      type: "kyc", ownerId: documentOwner?._id?.toString(), exists: Boolean(documentOwner),
-    })
-    if ("response" in authContext) return authContext.response
 
     const rateLimit = consumeRateLimit({
       key: buildRateLimitKey("kyc-document", authContext.user._id.toString(), getClientIpAddress(request)),

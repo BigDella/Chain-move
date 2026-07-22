@@ -1,4 +1,4 @@
-import type { Db } from "mongoose"
+import type { Db } from "mongodb"
 
 export type FixtureDataset = {
   collectionCount: number

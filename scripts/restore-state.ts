@@ -77,11 +77,11 @@ async function runRestoration() {
     const simResponse = await rpcServer.simulateTransaction(tx);
     
     if (rpc.Api.isSimulationSuccess(simResponse)) {
-      const preparedTx = rpc.assembleTransaction(tx, simResponse);
+      const preparedTx: any = rpc.assembleTransaction(tx, simResponse);
       preparedTx.sign(operatorKeypair);
       
       console.log("Submitting RestoreFootprintTTLOp transaction...");
-      const sendResponse = await rpcServer.sendTransaction(preparedTx);
+      const sendResponse: any = await rpcServer.sendTransaction(preparedTx);
       
       if (sendResponse.status !== "PENDING" && sendResponse.status !== "SUCCESS") {
         throw new Error(`RPC send failed: ${sendResponse.status}`);

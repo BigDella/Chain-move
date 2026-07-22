@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { ExternalLink, Loader2, RefreshCw, Sparkles } from "lucide-react"
+// @ts-ignore - date-fns typings bundler resolution
 import { format } from "date-fns"
 
 import { Badge } from "@/components/ui/badge"

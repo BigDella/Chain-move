@@ -9,6 +9,7 @@ import User from "@/models/User"
 import { logAuditEvent } from "@/lib/security/audit-log"
 import { buildRateLimitKey, consumeRateLimit, getClientIpAddress, rateLimitExceededResponse } from "@/lib/security/rate-limit"
 import { decodeCursor, encodeCursor } from "@/lib/api/cursor"
+import { ACTIVITY_CATEGORIES, inferActivityCategory } from "@/lib/activity"
 
 const querySchema = z.object({
   userId: z.string().trim().regex(/^[a-f\d]{24}$/i, "Invalid userId.").optional(),
@@ -57,7 +58,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "User not found" }, { status: 404 })
     }
 
-    const notification = await createActivity({
+    const notification = await Notification.create({
       userId: body.data.userId,
       createdBy: authContext.user._id.toString(),
       title: body.data.title,
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
       actor: authContext.user,
       action: "notification.create",
       targetType: "user",
-      targetId: body.data.userId,
+      targetId: body.data.userId || null,
       ipAddress: getClientIpAddress(request),
       metadata: {
         notificationId: notification._id.toString(),

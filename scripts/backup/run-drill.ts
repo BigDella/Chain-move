@@ -144,7 +144,7 @@ async function main() {
 
     if (!args.realBackup) {
       log("Phase 3: Seeding fixture data...")
-      fixtureDataset = await generateFixtures(mongoose.connection.db!, seed)
+      fixtureDataset = await generateFixtures(mongoose.connection.db as any, seed)
       log(`Seeded ${fixtureDataset.collectionCount} collections, ${fixtureDataset.documentCount} documents.`)
     }
 
