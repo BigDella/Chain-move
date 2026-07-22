@@ -44,6 +44,10 @@ pub enum Error {
     InvalidAmount = 5,
 }
 
+const DAY_IN_LEDGERS: u32 = 17280;
+const RENT_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+const RENT_EXTEND_TO: u32 = 30 * DAY_IN_LEDGERS;
+
 #[contractimpl]
 impl RepaymentContract {
     /// Initialize the contract and set the administrator.
@@ -52,6 +56,7 @@ impl RepaymentContract {
             return Err(Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
         Ok(())
     }
 
@@ -69,6 +74,7 @@ impl RepaymentContract {
             .ok_or(Error::NotInitialized)?;
         
         admin.require_auth();
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if total_owed <= 0 {
             return Err(Error::InvalidAmount);
@@ -81,9 +87,9 @@ impl RepaymentContract {
             active: true,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::DriverState(driver), &state);
+        let key = DataKey::DriverState(driver);
+        env.storage().persistent().set(&key, &state);
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         Ok(())
     }
@@ -103,6 +109,8 @@ impl RepaymentContract {
             .instance()
             .get::<DataKey, Address>(&DataKey::Admin)
             .ok_or(Error::NotInitialized)?;
+
+        env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
 
         if caller != admin && caller != driver {
             return Err(Error::Unauthorized);
@@ -126,6 +134,7 @@ impl RepaymentContract {
         state.total_repaid += amount;
 
         env.storage().persistent().set(&key, &state);
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         // Compute dynamic summary
         let outstanding_balance = if state.total_repaid >= state.total_owed {
@@ -158,6 +167,8 @@ impl RepaymentContract {
             .persistent()
             .get::<DataKey, RepaymentState>(&key)
             .ok_or(Error::NoActiveContract)?;
+
+        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         let outstanding_balance = if state.total_repaid >= state.total_owed {
             0
