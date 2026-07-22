@@ -109,6 +109,21 @@ const UserSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    pendingBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    heldBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    reversedBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     totalInvested: {
       type: Number,
       default: 0,
