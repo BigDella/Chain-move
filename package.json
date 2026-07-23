@@ -10,6 +10,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "next start",
+    "audit:export": "tsx scripts/audit-export.ts",
+    "audit:migrate": "tsx scripts/audit-migrate.ts",
+    "audit:verify": "tsx scripts/audit-verify.ts",
     "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
     "demo:pool-asset": "tsx scripts/demo-pool-asset.ts"
   },
