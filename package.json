@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",
     "start": "next start",
     "audit:export": "tsx scripts/audit-export.ts",
     "audit:migrate": "tsx scripts/audit-migrate.ts",
