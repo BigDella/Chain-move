@@ -1,4 +1,4 @@
-import mongoose, { Document, Schema } from "mongoose"
+import mongoose, { Schema } from "mongoose"
 
 /**
  * Persists the last successfully processed Stellar cursor (paging token)
@@ -7,6 +7,7 @@ import mongoose, { Document, Schema } from "mongoose"
  * full history on every run.
  */
 export interface IStellarIndexerCursor {
+  _id: string
   /** Stable identifier for the indexer stream, e.g. "payments", "operations". */
   streamId: string
   /** Stellar Horizon paging token / cursor value for the last processed record. */
@@ -20,8 +21,8 @@ export interface IStellarIndexerCursor {
   lastHeartbeatAt?: Date
   lastErrorAt?: Date
   lastError?: string
-  updatedAt: Date
-  createdAt: Date
+  updatedAt?: Date
+  createdAt?: Date
 }
 
 const StellarIndexerCursorSchema = new Schema<IStellarIndexerCursor>(
@@ -56,4 +57,4 @@ const StellarIndexerCursorSchema = new Schema<IStellarIndexerCursor>(
 )
 
 export default (mongoose.models.StellarIndexerCursor ||
-  mongoose.model<IStellarIndexerCursor>("StellarIndexerCursor", StellarIndexerCursorSchema)) as mongoose.Model<{ _id: any; [key: string]: any }>;
+  mongoose.model<IStellarIndexerCursor>("StellarIndexerCursor", StellarIndexerCursorSchema)) as mongoose.Model<IStellarIndexerCursor>

@@ -1,9 +1,14 @@
 import { readFileSync } from "fs"
 import { execFileSync } from "child_process"
+import { createRequire } from "module"
+import { dirname, resolve } from "path"
 
 const target = "docs/openapi/chainmove.openapi.json"
+const require = createRequire(import.meta.url)
+const tsxPackageRoot = dirname(require.resolve("tsx/package.json"))
+const tsxCli = resolve(tsxPackageRoot, "dist/cli.mjs")
 const before = readFileSync(target, "utf8")
-execFileSync("npx", ["tsx", "scripts/generate-openapi.ts"], { stdio: "inherit" })
+execFileSync(process.execPath, [tsxCli, "scripts/generate-openapi.ts"], { stdio: "inherit" })
 const after = readFileSync(target, "utf8")
 
 if (before !== after) {

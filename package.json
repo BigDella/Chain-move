@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",
     "start": "next start",
     "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
     "demo:pool-asset": "tsx scripts/demo-pool-asset.ts"
