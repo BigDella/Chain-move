@@ -8,6 +8,7 @@ import { sendEmail } from "@/lib/services/email.service"
 import { logAuditEvent } from "@/lib/security/audit-log"
 import { isSupportedKycDocumentReference } from "@/lib/security/kyc-documents"
 import User from "@/models/User"
+import { publishNotificationEvent } from "@/lib/notifications/service"
 
 type KycStatus = "none" | "pending" | "approved_stage1" | "pending_stage2" | "approved_stage2" | "rejected"
 type PhysicalMeetingStatus = "none" | "scheduled" | "approved" | "rescheduled" | "completed" | "rejected_stage2"
@@ -50,9 +51,6 @@ function normalizeReason(reason: string | null | undefined) {
   return trimmed.length > 0 ? trimmed.slice(0, 500) : null
 }
 
-function buildNotificationId() {
-  return `notif_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
-}
 
 function formatMeetingDate(date: Date | null) {
   if (!date) return "your scheduled date"
@@ -436,18 +434,6 @@ export async function updateUserKycStatus(
       reason: normalizedReason,
     })
 
-    if (notification) {
-      user.notifications = Array.isArray(user.notifications) ? user.notifications : []
-      user.notifications.push({
-        id: buildNotificationId(),
-        title: notification.title,
-        message: notification.message,
-        read: false,
-        timestamp: new Date(),
-        link: KYC_NOTIFICATION_LINK[userRole],
-      })
-    }
-
     await user.save()
 
     await logAuditEvent({
@@ -464,7 +450,12 @@ export async function updateUserKycStatus(
     })
 
     if (notification) {
-      await sendKycEmail(user, notification.subject, notification.emailMessage)
+      const decision = user.kycStatus === "rejected" ? "rejected" : user.kycStatus === "approved_stage2" ? "approved" : "review"
+      await publishNotificationEvent({
+        type: "kyc.decision", version: 1, userId: user._id.toString(),
+        eventId: `kyc:${user._id}:${user.kycStatus}:${user.physicalMeetingStatus || "none"}`,
+        occurredAt: new Date().toISOString(), payload: { decision },
+      })
     }
 
     revalidatePath("/dashboard/driver")
