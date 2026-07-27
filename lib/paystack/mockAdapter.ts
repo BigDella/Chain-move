@@ -1,19 +1,27 @@
 import {
+  AcceptNormalizedTxQuery,
   FetchTransactionsQuery,
   IPaystackAdapter,
+  NormalizedPaystackTransaction,
   PaystackPaginatedResponse,
   PaystackTransactionRecord,
 } from "./types"
 
 export class MockPaystackAdapter implements IPaystackAdapter {
   private mockRecords: PaystackTransactionRecord[]
+  private normalizedStore: NormalizedPaystackTransaction[]
 
   constructor(initialRecords: PaystackTransactionRecord[] = []) {
     this.mockRecords = initialRecords
+    this.normalizedStore = []
   }
 
   setRecords(records: PaystackTransactionRecord[]) {
     this.mockRecords = records
+  }
+
+  getNormalizedStore(): NormalizedPaystackTransaction[] {
+    return this.normalizedStore
   }
 
   async fetchTransactions(
@@ -58,5 +66,30 @@ export class MockPaystackAdapter implements IPaystackAdapter {
   async verifyTransaction(reference: string): Promise<PaystackTransactionRecord | null> {
     const found = this.mockRecords.find((r) => r.reference === reference)
     return found || null
+  }
+
+  async acceptNormalizedTransactions(
+    query: AcceptNormalizedTxQuery,
+  ): Promise<{ accepted: number; rejected: number; errors: string[] }> {
+    const errors: string[] = []
+    let accepted = 0
+    let rejected = 0
+
+    for (const tx of query.transactions) {
+      if (!tx.reference) {
+        errors.push(`Missing reference at index ${accepted + rejected}`)
+        rejected++
+        continue
+      }
+      if (tx.amount <= 0) {
+        errors.push(`Invalid amount for reference ${tx.reference}`)
+        rejected++
+        continue
+      }
+      this.normalizedStore.push(tx)
+      accepted++
+    }
+
+    return { accepted, rejected, errors }
   }
 }

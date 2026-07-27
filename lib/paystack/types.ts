@@ -1,3 +1,17 @@
+export interface NormalizedPaystackTransaction {
+  reference: string
+  amount: number // In NGN (not kobo)
+  currency: string
+  status: "success" | "failed" | "abandoned" | "reversed"
+  customerEmail?: string
+  customerName?: string
+  dedicatedAccountNumber?: string
+  channel?: string
+  paidAt?: string
+  createdAt: string
+  metadata?: Record<string, unknown>
+}
+
 export interface PaystackCustomer {
   id: number
   email: string
@@ -60,7 +74,14 @@ export interface FetchTransactionsQuery {
   status?: string
 }
 
+export interface AcceptNormalizedTxQuery {
+  transactions: NormalizedPaystackTransaction[]
+  source?: string
+  receivedAt?: string
+}
+
 export interface IPaystackAdapter {
   fetchTransactions(query: FetchTransactionsQuery): Promise<PaystackPaginatedResponse<PaystackTransactionRecord>>
   verifyTransaction(reference: string): Promise<PaystackTransactionRecord | null>
+  acceptNormalizedTransactions(query: AcceptNormalizedTxQuery): Promise<{ accepted: number; rejected: number; errors: string[] }>
 }

@@ -41,16 +41,19 @@ export async function runCliReconciliation() {
   console.log(`[CLI] Running Paystack Settlement Reconciliation for period [${periodStart.toISOString()} -> ${periodEnd.toISOString()}]...`)
 
   const adapter = isMock ? new MockPaystackAdapter() : new PaystackAdapter()
-  const reconResult = await runReconciliation(periodStart, periodEnd, adapter, "cli")
+  const reconResult = await runReconciliation({
+    periodStart,
+    periodEnd,
+    adapter,
+    triggeredBy: "cli",
+  })
 
   if (formatArg === "csv") {
     const csvOutput = generateReconciliationCsvExport(reconResult.discrepancies)
     console.log(csvOutput)
   } else {
     const jsonSummary = generateReconciliationJsonSummary(
-      reconResult.run.runId,
-      periodStart,
-      periodEnd,
+      reconResult.run,
       reconResult.discrepancies,
     )
     console.log(JSON.stringify(jsonSummary, null, 2))

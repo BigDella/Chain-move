@@ -1,7 +1,9 @@
 import axios from "axios"
 import {
+  AcceptNormalizedTxQuery,
   FetchTransactionsQuery,
   IPaystackAdapter,
+  NormalizedPaystackTransaction,
   PaystackPaginatedResponse,
   PaystackTransactionRecord,
 } from "./types"
@@ -74,5 +76,29 @@ export class PaystackAdapter implements IPaystackAdapter {
     } catch (err) {
       return null
     }
+  }
+
+  async acceptNormalizedTransactions(
+    query: AcceptNormalizedTxQuery,
+  ): Promise<{ accepted: number; rejected: number; errors: string[] }> {
+    const errors: string[] = []
+    let accepted = 0
+    let rejected = 0
+
+    for (const tx of query.transactions) {
+      if (!tx.reference) {
+        errors.push(`Missing reference at index ${accepted + rejected}`)
+        rejected++
+        continue
+      }
+      if (tx.amount <= 0) {
+        errors.push(`Invalid amount for reference ${tx.reference}`)
+        rejected++
+        continue
+      }
+      accepted++
+    }
+
+    return { accepted, rejected, errors }
   }
 }

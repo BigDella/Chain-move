@@ -1,6 +1,10 @@
 import crypto from "crypto"
 import dbConnect from "@/lib/dbConnect"
-import ReconciliationRun, { IReconciliationRun } from "@/models/ReconciliationRun"
+import ReconciliationRun, {
+  IReconciliationRun,
+  IReconciliationRunOperator,
+  IReconciliationRunTotals,
+} from "@/models/ReconciliationRun"
 import ReconciliationDiscrepancy, {
   DiscrepancyCategory,
   IReconciliationDiscrepancy,
@@ -13,7 +17,11 @@ import DriverVirtualAccount from "@/models/DriverVirtualAccount"
 import InvestorVirtualAccount from "@/models/InvestorVirtualAccount"
 import User from "@/models/User"
 import AuditLog from "@/models/AuditLog"
-import { IPaystackAdapter, PaystackTransactionRecord } from "@/lib/paystack/types"
+import {
+  IPaystackAdapter,
+  PaystackTransactionRecord,
+  NormalizedPaystackTransaction,
+} from "@/lib/paystack/types"
 
 /**
  * Computes deterministic SHA-256 hash fingerprint for discrepancy deduplication across re-runs.
@@ -33,15 +41,73 @@ export interface ReconciliationRunResult {
   discrepancies: IReconciliationDiscrepancy[]
 }
 
+export interface ReconciliationOperator {
+  userId?: string
+  userAgent?: string
+  ipAddress?: string
+}
+
+export interface ReconciliationOptions {
+  periodStart: Date
+  periodEnd: Date
+  adapter: IPaystackAdapter
+  triggeredBy?: string
+  operator?: ReconciliationOperator
+  normalizedTransactions?: NormalizedPaystackTransaction[]
+}
+
+/**
+ * Converts a NormalizedPaystackTransaction into a PaystackTransactionRecord
+ * shape suitable for reconciliation comparison.
+ */
+function normalizedToProviderRecord(
+  tx: NormalizedPaystackTransaction,
+): PaystackTransactionRecord {
+  return {
+    id: 0,
+    domain: "custom",
+    status: tx.status,
+    reference: tx.reference,
+    amount: tx.amount * 100,
+    gateway_response: "Normalized",
+    created_at: tx.createdAt,
+    paid_at: tx.paidAt,
+    channel: tx.channel || "custom",
+    currency: tx.currency || "NGN",
+    customer: tx.customerEmail
+      ? {
+          id: 0,
+          email: tx.customerEmail,
+          customer_code: "",
+          first_name: tx.customerName?.split(" ")[0] || "",
+          last_name: tx.customerName?.split(" ").slice(1).join(" ") || "",
+        }
+      : undefined,
+    dedicated_account: tx.dedicatedAccountNumber
+      ? {
+          account_number: tx.dedicatedAccountNumber,
+          account_name: "",
+          bank_name: "",
+        }
+      : undefined,
+  }
+}
+
 /**
  * Executes Paystack-to-ledger settlement reconciliation over specified date window.
  */
 export async function runReconciliation(
-  periodStart: Date,
-  periodEnd: Date,
-  adapter: IPaystackAdapter,
-  triggeredBy = "system",
+  options: ReconciliationOptions,
 ): Promise<ReconciliationRunResult> {
+  const {
+    periodStart,
+    periodEnd,
+    adapter,
+    triggeredBy = "system",
+    operator,
+    normalizedTransactions,
+  } = options
+
   await dbConnect()
 
   const runId = `RECON-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
@@ -53,7 +119,21 @@ export async function runReconciliation(
     status: "in_progress",
     triggeredBy,
     startedAt: new Date(),
+    operator: operator
+      ? {
+          userId: operator.userId ? (operator.userId as any) : undefined,
+          userAgent: operator.userAgent,
+          ipAddress: operator.ipAddress,
+        }
+      : undefined,
   })
+
+  let providerTotal = 0
+  let internalTotal = 0
+  let discrepancyTotal = 0
+  let remediatedTotal = 0
+  let matchedCount = 0
+  let unmatchedCount = 0
 
   try {
     // 1. Fetch provider transaction records with pagination
@@ -75,6 +155,18 @@ export async function runReconciliation(
         hasMore = false
       } else {
         page++
+      }
+    }
+
+    // 1b. Merge normalized transactions if provided
+    if (normalizedTransactions && normalizedTransactions.length > 0) {
+      for (const ntx of normalizedTransactions) {
+        const alreadyExists = allProviderRecords.some(
+          (r) => r.reference === ntx.reference,
+        )
+        if (!alreadyExists) {
+          allProviderRecords.push(normalizedToProviderRecord(ntx))
+        }
       }
     }
 
@@ -103,14 +195,16 @@ export async function runReconciliation(
       }
     }
 
-    const processedEventIds = new Set<string>(processedEvents.map((e) => e._id))
     const driverPaymentByRef = new Map<string, any>()
     for (const dp of driverPayments) {
-      if (dp.gatewayReference) {
-        driverPaymentByRef.set(dp.gatewayReference, dp)
+      if (dp.paystackRef) {
+        driverPaymentByRef.set(dp.paystackRef, dp)
       }
     }
 
+    const processedEventIds = new Set<string>(processedEvents.map((e) => e._id))
+
+    // Track provider references for duplicate detection
     const providerRefCounts = new Map<string, number>()
     for (const pRec of allProviderRecords) {
       if (pRec.reference) {
@@ -118,14 +212,32 @@ export async function runReconciliation(
       }
     }
 
+    // Track internal gateway references for duplicate detection
+    const internalRefCounts = new Map<string, number>()
+    for (const tx of internalTxs) {
+      if (tx.gatewayReference) {
+        internalRefCounts.set(tx.gatewayReference, (internalRefCounts.get(tx.gatewayReference) || 0) + 1)
+      }
+    }
+
+    // Track DVA account numbers
+    const dvaAccountNumbers = new Set<string>()
+    for (const dva of driverDvas) {
+      if (dva.accountNumber) dvaAccountNumbers.add(dva.accountNumber)
+    }
+    for (const dva of investorDvas) {
+      if (dva.accountNumber) dvaAccountNumbers.add(dva.accountNumber)
+    }
+
     const discrepanciesToSave: Array<Partial<IReconciliationDiscrepancy>> = []
-    let matchedCount = 0
 
     // 3. Compare Provider Records -> Internal Records
     for (const pRec of allProviderRecords) {
       const pRef = pRec.reference
-      const pAmountNgn = pRec.amount / 100 // Convert kobo to NGN
+      const pAmountNgn = pRec.amount / 100
       const pStatus = pRec.status
+
+      providerTotal += pAmountNgn
 
       // Check DUPLICATE_PROVIDER_RECORD
       if (providerRefCounts.get(pRef)! > 1) {
@@ -141,6 +253,8 @@ export async function runReconciliation(
           providerCustomerEmail: pRec.customer?.email,
           explanation: `Paystack reported duplicate reference '${pRef}' across multiple transaction entries`,
         })
+        unmatchedCount++
+        continue
       }
 
       // Check UNKNOWN_ACCOUNT if dedicated account transfer
@@ -160,6 +274,8 @@ export async function runReconciliation(
             providerCustomerEmail: pRec.customer?.email,
             explanation: `Dedicated account transfer to '${dvaNumber}' does not match any registered driver or investor virtual account`,
           })
+          unmatchedCount++
+          continue
         }
       }
 
@@ -181,12 +297,15 @@ export async function runReconciliation(
           providerCustomerEmail: pRec.customer?.email,
           explanation: `Provider transaction '${pRef}' of NGN ${pAmountNgn} has no corresponding internal Transaction or DriverPayment record`,
         })
+        discrepancyTotal += pAmountNgn
+        unmatchedCount++
       } else {
         matchedCount++
 
         const intTx = matchingTx || matchingDp
         const intAmount = intTx ? intTx.amount || intTx.amountPaidNgn : 0
         const intStatus = intTx ? intTx.status : "Completed"
+        internalTotal += intAmount
 
         // Check AMOUNT_MISMATCH
         if (intTx && Math.abs(intAmount - pAmountNgn) > 0.01) {
@@ -202,6 +321,7 @@ export async function runReconciliation(
             internalAmount: intAmount,
             explanation: `Paystack settled amount (NGN ${pAmountNgn}) does not match internal record amount (NGN ${intAmount})`,
           })
+          discrepancyTotal += Math.abs(intAmount - pAmountNgn)
         }
 
         // Check STATUS_MISMATCH
@@ -221,6 +341,7 @@ export async function runReconciliation(
             internalStatus: intStatus,
             explanation: `Paystack status is '${pStatus}' but internal transaction status is '${intStatus}'`,
           })
+          discrepancyTotal += pAmountNgn
         }
 
         // Check REVERSAL_REFUND
@@ -238,6 +359,7 @@ export async function runReconciliation(
             internalStatus: intStatus,
             explanation: `Paystack transaction '${pRef}' was reversed/refunded after internal transaction was completed`,
           })
+          discrepancyTotal += pAmountNgn
         }
 
         // Check OWNER_MISMATCH if customer email differs from internal user
@@ -256,6 +378,7 @@ export async function runReconciliation(
               internalTransactionId: intId,
               explanation: `Paystack customer email '${pRec.customer.email}' does not match internal record user email '${userObj.email}'`,
             })
+            discrepancyTotal += pAmountNgn
           }
         }
       }
@@ -272,6 +395,8 @@ export async function runReconciliation(
     const now = new Date().getTime()
     for (const tx of internalTxs) {
       const gRef = tx.gatewayReference
+      internalTotal += tx.amount || 0
+
       if (gRef && !providerRefMap.has(gRef)) {
         // MISSING_PROVIDER_RECORD
         const txId = tx._id.toString()
@@ -286,6 +411,49 @@ export async function runReconciliation(
           internalStatus: tx.status,
           explanation: `Internal transaction '${txId}' has gateway reference '${gRef}' but Paystack returned no matching transaction record`,
         })
+        discrepancyTotal += tx.amount || 0
+        unmatchedCount++
+      }
+
+      // Check DUPLICATE_INTERNAL_RECORD
+      if (gRef && internalRefCounts.get(gRef)! > 1) {
+        const txId = tx._id.toString()
+        const fp = createDiscrepancyFingerprint("DUPLICATE_INTERNAL_RECORD", gRef, txId, tx.amount)
+        discrepanciesToSave.push({
+          fingerprint: fp,
+          runId,
+          category: "DUPLICATE_INTERNAL_RECORD",
+          providerReference: gRef,
+          internalTransactionId: txId,
+          internalAmount: tx.amount,
+          internalStatus: tx.status,
+          explanation: `Internal transaction '${txId}' has duplicate gateway reference '${gRef}' across multiple internal records`,
+        })
+        discrepancyTotal += tx.amount || 0
+        unmatchedCount++
+      }
+
+      // Check INTERNAL_LEDGER_MISMATCH (amount doesn't match expected ledger balance)
+      if (gRef && providerRefMap.has(gRef)) {
+        const pRec = providerRefMap.get(gRef)!
+        const pAmountNgn = pRec.amount / 100
+        if (Math.abs((tx.amount || 0) - pAmountNgn) > 0.01) {
+          const txId = tx._id.toString()
+          const fp = createDiscrepancyFingerprint("INTERNAL_LEDGER_MISMATCH", gRef, txId, tx.amount || 0)
+          discrepanciesToSave.push({
+            fingerprint: fp,
+            runId,
+            category: "INTERNAL_LEDGER_MISMATCH",
+            providerReference: gRef,
+            internalTransactionId: txId,
+            internalAmount: tx.amount || 0,
+            providerAmount: pAmountNgn,
+            internalStatus: tx.status,
+            explanation: `Internal ledger amount (NGN ${tx.amount}) does not match Paystack settled amount (NGN ${pAmountNgn}) for reference '${gRef}'`,
+          })
+          discrepancyTotal += Math.abs((tx.amount || 0) - pAmountNgn)
+          unmatchedCount++
+        }
       }
 
       // Check STALE_PENDING (>24 hours in Pending status)
@@ -304,6 +472,8 @@ export async function runReconciliation(
             internalStatus: tx.status,
             explanation: `Internal transaction '${txId}' has been in 'Pending' status for ${Math.round(ageHours)} hours`,
           })
+          discrepancyTotal += tx.amount || 0
+          unmatchedCount++
         }
       }
     }
@@ -319,15 +489,32 @@ export async function runReconciliation(
       savedDiscrepancies.push(upserted)
     }
 
-    // 6. Update Reconciliation Run document metrics
+    // 6. Count remediated discrepancies
+    const remediatedCount = await ReconciliationDiscrepancy.countDocuments({
+      runId,
+      remediationStatus: { $in: ["manually_resolved", "auto_remediated"] },
+    })
+    remediatedTotal = savedDiscrepancies
+      .filter((d) => d.remediationStatus === "manually_resolved" || d.remediationStatus === "auto_remediated")
+      .reduce((sum, d) => sum + (d.providerAmount || d.internalAmount || 0), 0)
+
+    // 7. Update Reconciliation Run document with totals and metrics
     runDoc.status = "completed"
     runDoc.completedAt = new Date()
+    runDoc.totals = {
+      providerTotal,
+      internalTotal,
+      discrepancyTotal,
+      remediatedTotal,
+      matchedCount,
+      unmatchedCount,
+    }
     runDoc.metrics = {
       totalProviderRecords: allProviderRecords.length,
       totalInternalRecords: internalTxs.length,
       matchedRecords: matchedCount,
       discrepancyCount: savedDiscrepancies.length,
-      remediatedCount: 0,
+      remediatedCount,
     }
     await runDoc.save()
 
@@ -339,6 +526,72 @@ export async function runReconciliation(
     await runDoc.save()
     throw error
   }
+}
+
+/**
+ * Accepts normalized Paystack transaction data through the provider adapter
+ * for reconciliation without fetching from the live API.
+ */
+export async function runReconciliationWithNormalizedData(
+  periodStart: Date,
+  periodEnd: Date,
+  adapter: IPaystackAdapter,
+  normalizedTransactions: NormalizedPaystackTransaction[],
+  triggeredBy = "system",
+  operator?: ReconciliationOperator,
+): Promise<ReconciliationRunResult> {
+  const validation = await adapter.acceptNormalizedTransactions({
+    transactions: normalizedTransactions,
+    receivedAt: new Date().toISOString(),
+  })
+
+  if (validation.rejected > 0) {
+    const runId = `RECON-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+    const runDoc = await ReconciliationRun.create({
+      runId,
+      provider: "paystack",
+      periodStart,
+      periodEnd,
+      status: "failed",
+      triggeredBy,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      operator: operator
+        ? {
+            userId: operator.userId ? (operator.userId as any) : undefined,
+            userAgent: operator.userAgent,
+            ipAddress: operator.ipAddress,
+          }
+        : undefined,
+      totals: {
+        providerTotal: 0,
+        internalTotal: 0,
+        discrepancyTotal: 0,
+        remediatedTotal: 0,
+        matchedCount: 0,
+        unmatchedCount: 0,
+      },
+      metrics: {
+        totalProviderRecords: 0,
+        totalInternalRecords: 0,
+        matchedRecords: 0,
+        discrepancyCount: 0,
+        remediatedCount: 0,
+      },
+      errorMessage: `Normalized data validation rejected ${validation.rejected} transactions: ${validation.errors.join("; ")}`,
+    })
+
+    return { run: runDoc, discrepancies: [] }
+  }
+
+  return runReconciliation({
+    periodStart,
+    periodEnd,
+    adapter,
+    triggeredBy,
+    operator,
+    normalizedTransactions,
+  })
 }
 
 /**
@@ -364,7 +617,6 @@ export async function remediateDiscrepancy(
   let auditAction = ""
 
   if (action === "RECONCILE_CREATE_TRANSACTION") {
-    // Create missing internal transaction record safely
     if (discrepancy.category === "MISSING_INTERNAL_RECORD") {
       const systemUser = await User.findOne({ role: "admin" })
       const userId = systemUser ? systemUser._id : reviewerUserId
@@ -386,7 +638,6 @@ export async function remediateDiscrepancy(
       auditAction = `RECONCILE_CREATE_TRANSACTION: Created transaction ${newTx._id}`
     }
   } else if (action === "RECONCILE_POST_REVERSAL") {
-    // Post immutable counter-adjustment wallet_debit transaction
     if (discrepancy.internalTransactionId) {
       const origTx = await Transaction.findById(discrepancy.internalTransactionId)
       if (origTx) {
@@ -420,7 +671,6 @@ export async function remediateDiscrepancy(
     auditAction = "IGNORE: Marked discrepancy as ignored by reviewer"
   }
 
-  // Create Audit Log record
   const auditEntry = await AuditLog.create({
     userId: reviewerUserId,
     action: "RECONCILIATION_REMEDIATE",

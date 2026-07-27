@@ -1,4 +1,5 @@
 import { IReconciliationDiscrepancy } from "@/models/ReconciliationDiscrepancy"
+import { IReconciliationRun } from "@/models/ReconciliationRun"
 
 const PII_KEYS = ["email", "phone", "phoneNumber", "address", "fullName", "name", "password", "secret"]
 
@@ -40,10 +41,33 @@ export function redactPii<T>(input: T): T {
   return input
 }
 
-export interface ReconciliationReportSummary {
+export interface ReconciliationRunSummary {
   runId: string
+  provider: string
   periodStart: string
   periodEnd: string
+  status: string
+  triggeredBy: string
+  operator?: {
+    userId?: string
+    userAgent?: string
+    ipAddress?: string
+  }
+  totals: {
+    providerTotal: number
+    internalTotal: number
+    discrepancyTotal: number
+    remediatedTotal: number
+    matchedCount: number
+    unmatchedCount: number
+  }
+  metrics: {
+    totalProviderRecords: number
+    totalInternalRecords: number
+    matchedRecords: number
+    discrepancyCount: number
+    remediatedCount: number
+  }
   totalDiscrepancies: number
   byCategory: Record<string, number>
   byStatus: Record<string, number>
@@ -64,15 +88,38 @@ export interface ReconciliationReportSummary {
 }
 
 export function generateReconciliationJsonSummary(
-  runId: string,
-  periodStart: Date,
-  periodEnd: Date,
+  run: IReconciliationRun,
   discrepancies: Array<IReconciliationDiscrepancy | Record<string, any>>,
-): ReconciliationReportSummary {
-  const summary: ReconciliationReportSummary = {
-    runId,
-    periodStart: periodStart.toISOString(),
-    periodEnd: periodEnd.toISOString(),
+): ReconciliationRunSummary {
+  const summary: ReconciliationRunSummary = {
+    runId: run.runId,
+    provider: run.provider,
+    periodStart: run.periodStart.toISOString(),
+    periodEnd: run.periodEnd.toISOString(),
+    status: run.status,
+    triggeredBy: run.triggeredBy,
+    operator: run.operator
+      ? {
+          userId: run.operator.userId?.toString(),
+          userAgent: run.operator.userAgent,
+          ipAddress: run.operator.ipAddress,
+        }
+      : undefined,
+    totals: run.totals || {
+      providerTotal: 0,
+      internalTotal: 0,
+      discrepancyTotal: 0,
+      remediatedTotal: 0,
+      matchedCount: 0,
+      unmatchedCount: 0,
+    },
+    metrics: run.metrics || {
+      totalProviderRecords: 0,
+      totalInternalRecords: 0,
+      matchedRecords: 0,
+      discrepancyCount: 0,
+      remediatedCount: 0,
+    },
     totalDiscrepancies: discrepancies.length,
     byCategory: {},
     byStatus: {},
@@ -141,6 +188,54 @@ export function generateReconciliationCsvExport(
       `"${explanation}"`,
     ].join(",")
   })
+
+  return [headers.join(","), ...rows].join("\n")
+}
+
+export function generateReconciliationRunCsvExport(runs: IReconciliationRun[]): string {
+  const headers = [
+    "RunID",
+    "Provider",
+    "PeriodStart",
+    "PeriodEnd",
+    "Status",
+    "TriggeredBy",
+    "OperatorUserId",
+    "ProviderTotal",
+    "InternalTotal",
+    "DiscrepancyTotal",
+    "RemediatedTotal",
+    "MatchedCount",
+    "UnmatchedCount",
+    "TotalProviderRecords",
+    "TotalInternalRecords",
+    "MatchedRecords",
+    "DiscrepancyCount",
+    "RemediatedCount",
+    "ErrorMessage",
+  ]
+
+  const rows = runs.map((r) => [
+    `"${r.runId}"`,
+    `"${r.provider}"`,
+    r.periodStart.toISOString(),
+    r.periodEnd.toISOString(),
+    `"${r.status}"`,
+    `"${r.triggeredBy}"`,
+    r.operator?.userId ? `"${r.operator.userId}"` : "",
+    r.totals?.providerTotal || 0,
+    r.totals?.internalTotal || 0,
+    r.totals?.discrepancyTotal || 0,
+    r.totals?.remediatedTotal || 0,
+    r.totals?.matchedCount || 0,
+    r.totals?.unmatchedCount || 0,
+    r.metrics?.totalProviderRecords || 0,
+    r.metrics?.totalInternalRecords || 0,
+    r.metrics?.matchedRecords || 0,
+    r.metrics?.discrepancyCount || 0,
+    r.metrics?.remediatedCount || 0,
+    `"${(r.errorMessage || "").replace(/"/g, '""')}"`,
+  ])
 
   return [headers.join(","), ...rows].join("\n")
 }
