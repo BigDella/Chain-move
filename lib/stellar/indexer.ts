@@ -284,6 +284,29 @@ async function persistEvent(op: RawStellarOperation): Promise<PersistResult> {
 
   try {
     await StellarIndexedEvent.create(doc)
+
+    const txHash = op.transaction_hash || op.id
+    const { default: SettlementRecord } = await import("@/models/SettlementRecord")
+    const { transitionSettlementState } = await import("@/lib/settlement/settlement-service")
+
+    const matchingSettlement = await SettlementRecord.findOne({
+      $or: [{ providerReference: txHash }, { stellarHash: txHash }, { providerReference: op.id }],
+      rail: "stellar",
+    })
+
+    if (matchingSettlement && matchingSettlement.currentState !== "confirmed") {
+      const newConfirmations = (matchingSettlement.confirmationsCount || 0) + 1
+      const isConfirmed = newConfirmations >= matchingSettlement.finalityThreshold
+      await transitionSettlementState({
+        settlementId: matchingSettlement.settlementId,
+        targetState: isConfirmed ? "confirmed" : "observed",
+        triggeredBy: "indexer",
+        reason: `Indexed Stellar operation ${op.id} (ledger: ${op.ledger_attr || "unknown"})`,
+        stellarHash: txHash,
+        confirmationsCount: newConfirmations,
+      })
+    }
+
     return { inserted: true, duplicate: false }
   } catch (err: unknown) {
     // MongoDB duplicate key error code 11000 means this event was already
