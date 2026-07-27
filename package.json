@@ -8,6 +8,7 @@
     "dev:stable": "next dev --webpack --disable-source-maps",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:contracts": "vitest run __tests__/lib/api",
     "typecheck": "tsc --noEmit",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",

@@ -40,21 +40,33 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
+/** Canonical money envelope from the API. See docs/api-conventions.md. */
+interface Money {
+  currency: string
+  amountMinor: number
+  amountMajor: number
+}
+
 interface WalletTransaction {
   id: string
   type: string
-  amount: number
-  currency: string
+  amount: Money
   status: string
-  method?: string
+  method: string | null
   description: string
-  reference?: string
+  reference: string | null
   timestamp: string
+}
+
+/** Builds the API money envelope for locally synthesized demo rows. */
+function toMoney(amountMajor: number, currency: string): Money {
+  const safeMajor = Number.isFinite(amountMajor) ? amountMajor : 0
+  return { currency, amountMinor: Math.round(safeMajor * 100), amountMajor: safeMajor }
 }
 
 interface WalletSummaryPayload {
   wallet: {
-    internalBalanceNgn: number
+    internalBalance: Money
     walletAddress: string | null
   }
   transactions: WalletTransaction[]
@@ -133,18 +145,18 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
     embeddedWalletAddress: walletAddress,
     stellarPublicKey: isMockStellar ? mockAccount.publicKey : authUser?.stellarPublicKey,
   })
-  const internalBalance = walletSummary?.wallet.internalBalanceNgn || 0
+  const internalBalance = walletSummary?.wallet.internalBalance.amountMajor || 0
 
-  const fundingTransactions = useMemo(() => {
+  const fundingTransactions = useMemo<WalletTransaction[]>(() => {
     if (isMockStellar) {
       return mockActivity.map(activity => ({
         id: activity.id,
         type: activity.type,
-        amount: Number.parseFloat(activity.amount),
-        currency: "USD",
+        amount: toMoney(Number.parseFloat(activity.amount), "USD"),
         status: activity.status,
         method: "Stellar Demo",
         description: activity.type,
+        reference: null,
         timestamp: activity.timestamp,
       }))
     }
@@ -160,7 +172,7 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
 
     if (isMockStellar) {
       setWalletSummary({
-        wallet: { internalBalanceNgn: 150000, walletAddress: mockAccount.publicKey },
+        wallet: { internalBalance: toMoney(150000, "NGN"), walletAddress: mockAccount.publicKey },
         transactions: []
       })
       setIsSummaryLoading(false)
@@ -344,7 +356,7 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
         throw new Error(payload.message || "Unable to initialize Paystack funding.")
       }
 
-      const redirectUrl = payload?.data?.authorization_url
+      const redirectUrl = payload?.payment?.authorizationUrl
       if (!redirectUrl) {
         throw new Error("Missing Paystack authorization URL.")
       }
@@ -652,7 +664,7 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
                       <Badge variant={tx.status.toLowerCase() === "completed" ? "default" : "secondary"}>{tx.status}</Badge>
                     </div>
                     <p className="mt-2 text-sm capitalize text-muted-foreground">{tx.method || tx.type.replaceAll("_", " ")}</p>
-                    <p className="mt-1 text-sm font-semibold">{formatNaira(tx.amount)}</p>
+                    <p className="mt-1 text-sm font-semibold">{formatNaira(tx.amount.amountMajor)}</p>
                   </article>
                 ))}
               </div>
@@ -677,7 +689,7 @@ export function InvestorWalletPanel({ sectionId = "wallet", className, showTitle
                             {tx.status}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-right font-medium">{formatNaira(tx.amount)}</TableCell>
+                        <TableCell className="text-right font-medium">{formatNaira(tx.amount.amountMajor)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

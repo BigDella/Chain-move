@@ -27,23 +27,22 @@ import { updateUserKycStatus } from "@/actions/user"
 
 // Update the KycRequest interface to include new fields
 interface KycRequest {
-  _id: string
-  role: "driver" | "investor"
-  name: string
-  fullName?: string
-  email?: string | null
-  phoneNumber?: string
+  id: string
+  role: "driver" | "investor" | "admin"
+  name: string | null
+  email: string | null
+  phoneNumber: string | null
   kycStatus: "none" | "pending" | "approved_stage1" | "pending_stage2" | "approved_stage2" | "rejected"
-  kycDocuments: string[]
-  createdAt: string
-  updatedAt: string
-  kycRejectionReason?: string | null
-  physicalMeetingDate?: string | null
-  physicalMeetingStatus?: "none" | "scheduled" | "approved" | "rescheduled" | "completed" | "rejected_stage2" // Updated enum
+  documentCount: number
+  documentReferences: string[]
+  updatedAt: string | null
+  rejectionReason: string | null
+  physicalMeetingDate: string | null
+  physicalMeetingStatus: "none" | "scheduled" | "approved" | "rescheduled" | "completed" | "rejected_stage2" | null
 }
 
 function getRequestDisplayName(request: KycRequest) {
-  return request.fullName?.trim() || request.name || request.email || "Unknown user"
+  return request.name?.trim() || request.email || "Unknown user"
 }
 
 function getActionLabel(actionType: AdminKycManagementPageAction | null, request: KycRequest | null) {
@@ -108,10 +107,10 @@ export default function AdminKycManagementPage() {
       const res = await fetch("/api/admin/kyc-requests")
       if (!res.ok) {
         const errorData = await res.json()
-        throw new Error(errorData.error || "Failed to fetch KYC requests")
+        throw new Error(errorData.message || "Failed to fetch KYC requests")
       }
-      const data: KycRequest[] = await res.json()
-      setKycRequests(data)
+      const payload: { requests: KycRequest[] } = await res.json()
+      setKycRequests(payload.requests)
     } catch (err: any) {
       console.error("Error fetching KYC requests:", err)
       setError(err.message || "An unexpected error occurred.")
@@ -212,9 +211,9 @@ export default function AdminKycManagementPage() {
       }
 
       const res = await updateUserKycStatus(
-        selectedRequest._id,
+        selectedRequest.id,
         newKycStatus,
-        selectedRequest.kycDocuments,
+        selectedRequest.documentReferences,
         rejectionReason,
         newPhysicalMeetingDate, // Pass existing or updated date
         newPhysicalMeetingStatus, // Pass updated physical meeting status
@@ -262,9 +261,9 @@ export default function AdminKycManagementPage() {
     setIsSubmitting(true)
     try {
       const res = await updateUserKycStatus(
-        selectedRequest._id,
+        selectedRequest.id,
         selectedRequest.kycStatus, // Keep current KYC status
-        selectedRequest.kycDocuments,
+        selectedRequest.documentReferences,
         rescheduleReasonInput.trim(),
         new Date(rescheduleDateInput), // New rescheduled date
         "rescheduled", // Set physical meeting status to rescheduled
@@ -404,7 +403,7 @@ export default function AdminKycManagementPage() {
                 </TableHeader>
                 <TableBody>
                   {kycRequests.map((request) => (
-                    <TableRow key={request._id}>
+                    <TableRow key={request.id}>
                       <TableCell className="font-medium">{getRequestDisplayName(request)}</TableCell>
                       <TableCell className="capitalize">{request.role}</TableCell>
                       <TableCell>{request.email || "N/A"}</TableCell>
@@ -437,9 +436,9 @@ export default function AdminKycManagementPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        {request.kycDocuments && request.kycDocuments.length > 0 ? (
+                        {request.documentReferences && request.documentReferences.length > 0 ? (
                           <div className="flex flex-wrap gap-2">
-                            {request.kycDocuments.map((doc, index) => (
+                            {request.documentReferences.map((doc, index) => (
                               <Button
                                 key={index}
                                 variant="outline"
@@ -457,8 +456,8 @@ export default function AdminKycManagementPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        {request.kycRejectionReason ? (
-                          <span className="text-sm text-red-600">{request.kycRejectionReason}</span>
+                        {request.rejectionReason ? (
+                          <span className="text-sm text-red-600">{request.rejectionReason}</span>
                         ) : (
                           <span className="text-muted-foreground text-sm">N/A</span>
                         )}

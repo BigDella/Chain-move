@@ -14,7 +14,9 @@ function routeKey(file: string, method: string) {
 
 describe("route policy inventory", () => {
   it("denies undeclared API handlers by default", () => {
-    const discovered = routeFiles(path.join(process.cwd(), "app", "api")).flatMap(file => [...fs.readFileSync(file, "utf8").matchAll(/export async function (GET|POST|PUT|PATCH|DELETE)/g)].map(match => routeKey(file, match[1])))
+    // Handlers are declared either directly (`export async function GET`) or
+    // through the shared contract wrapper (`export const GET = defineRoute`).
+    const discovered = routeFiles(path.join(process.cwd(), "app", "api")).flatMap(file => [...fs.readFileSync(file, "utf8").matchAll(/export (?:async function|const) (GET|POST|PUT|PATCH|DELETE)\b/g)].map(match => routeKey(file, match[1])))
     expect(discovered.filter(key => !ROUTE_POLICY_INVENTORY[key])).toEqual([])
     expect(Object.keys(ROUTE_POLICY_INVENTORY).filter(key => !discovered.includes(key))).toEqual([])
   })

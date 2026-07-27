@@ -37,6 +37,13 @@ import { cn } from "@/lib/utils"
 
 type LedgerRole = "admin" | "investor" | "driver"
 
+/** Canonical money envelope from the API. See docs/api-conventions.md. */
+interface Money {
+  currency: string
+  amountMinor: number
+  amountMajor: number
+}
+
 interface LedgerEntry {
   id: string
   userId: string
@@ -45,10 +52,8 @@ interface LedgerEntry {
   userEmail: string | null
   type: string
   direction: "credit" | "debit"
-  amount: number
-  amountOriginal: number | null
-  currency: string
-  originalCurrency: string | null
+  amount: Money
+  originalAmount: Money | null
   exchangeRate: number | null
   method: string | null
   reference: string | null
@@ -56,19 +61,18 @@ interface LedgerEntry {
   status: string
   reconciliation: "reconciled" | "pending" | "failed" | "duplicate"
   relatedId: string | null
-  metadata: Record<string, unknown> | null
   timestamp: string
 }
 
 interface LedgerSummary {
   totalCount: number
-  totalAmount: number
+  totalAmount: Money
   completedCount: number
-  completedAmount: number
+  completedAmount: Money
   pendingCount: number
-  pendingAmount: number
+  pendingAmount: Money
   failedCount: number
-  failedAmount: number
+  failedAmount: Money
   duplicateCount: number
 }
 
@@ -76,7 +80,7 @@ interface LedgerResponse {
   success: boolean
   scope: "global" | "self"
   transactions: LedgerEntry[]
-  pagination: { page: number; pageSize: number; total: number; totalPages: number }
+  pagination: { page: number; pageSize: number; total: number; totalPages: number; hasNext: boolean; hasPrevious: boolean }
   summary: LedgerSummary
 }
 
@@ -273,21 +277,21 @@ export function TransactionLedger({ role, title, description }: TransactionLedge
     {
       label: "Total Transactions",
       value: summary ? summary.totalCount.toLocaleString() : "—",
-      sub: summary ? `${formatNaira(summary.totalAmount)} total volume` : "",
+      sub: summary ? `${formatNaira(summary.totalAmount.amountMajor)} total volume` : "",
     },
     {
       label: "Completed",
-      value: summary ? formatNaira(summary.completedAmount) : "—",
+      value: summary ? formatNaira(summary.completedAmount.amountMajor) : "—",
       sub: summary ? `${summary.completedCount.toLocaleString()} transactions` : "",
     },
     {
       label: "Pending",
-      value: summary ? formatNaira(summary.pendingAmount) : "—",
+      value: summary ? formatNaira(summary.pendingAmount.amountMajor) : "—",
       sub: summary ? `${summary.pendingCount.toLocaleString()} transactions` : "",
     },
     {
       label: "Failed",
-      value: summary ? formatNaira(summary.failedAmount) : "—",
+      value: summary ? formatNaira(summary.failedAmount.amountMajor) : "—",
       sub: summary ? `${summary.failedCount.toLocaleString()} transactions` : "",
     },
   ]
@@ -506,7 +510,7 @@ export function TransactionLedger({ role, title, description }: TransactionLedge
                         )}
                       >
                         {entry.direction === "credit" ? "+" : "-"}
-                        {formatNaira(entry.amount)}
+                        {formatNaira(entry.amount.amountMajor)}
                       </TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(entry.status)}>{entry.status}</Badge>
@@ -580,7 +584,7 @@ export function TransactionLedger({ role, title, description }: TransactionLedge
                     )}
                   >
                     {selected.direction === "credit" ? "+" : "-"}
-                    {formatNaira(selected.amount)}
+                    {formatNaira(selected.amount.amountMajor)}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Badge variant={statusVariant(selected.status)}>{selected.status}</Badge>
@@ -598,10 +602,10 @@ export function TransactionLedger({ role, title, description }: TransactionLedge
                 <DetailRow label="Provider / Method" value={formatMethod(selected.method)} />
                 <DetailRow label="Reference" value={selected.reference || "—"} mono />
                 {selected.relatedId ? <DetailRow label="Related ID" value={selected.relatedId} mono /> : null}
-                {selected.amountOriginal != null ? (
+                {selected.originalAmount != null ? (
                   <DetailRow
                     label="Original Amount"
-                    value={`${selected.amountOriginal} ${selected.originalCurrency ?? ""}`.trim()}
+                    value={`${selected.originalAmount.amountMajor} ${selected.originalAmount.currency}`.trim()}
                   />
                 ) : null}
                 {selected.exchangeRate != null ? (
