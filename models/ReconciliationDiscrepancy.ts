@@ -4,12 +4,14 @@ export type DiscrepancyCategory =
   | "MISSING_INTERNAL_RECORD"
   | "MISSING_PROVIDER_RECORD"
   | "DUPLICATE_PROVIDER_RECORD"
+  | "DUPLICATE_INTERNAL_RECORD"
   | "AMOUNT_MISMATCH"
   | "OWNER_MISMATCH"
   | "STATUS_MISMATCH"
   | "STALE_PENDING"
   | "REVERSAL_REFUND"
   | "UNKNOWN_ACCOUNT"
+  | "INTERNAL_LEDGER_MISMATCH"
 
 export type RemediationStatus = "unresolved" | "auto_remediated" | "manually_resolved" | "ignored"
 
@@ -61,12 +63,14 @@ const ReconciliationDiscrepancySchema = new Schema<IReconciliationDiscrepancy>(
         "MISSING_INTERNAL_RECORD",
         "MISSING_PROVIDER_RECORD",
         "DUPLICATE_PROVIDER_RECORD",
+        "DUPLICATE_INTERNAL_RECORD",
         "AMOUNT_MISMATCH",
         "OWNER_MISMATCH",
         "STATUS_MISMATCH",
         "STALE_PENDING",
         "REVERSAL_REFUND",
         "UNKNOWN_ACCOUNT",
+        "INTERNAL_LEDGER_MISMATCH",
       ],
       required: true,
       index: true,

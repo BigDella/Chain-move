@@ -1,6 +1,22 @@
 import mongoose, { Document, Schema } from "mongoose"
 
 export type ReconciliationRunStatus = "in_progress" | "completed" | "failed"
+export type ReconciliationProvider = "paystack" | "stripe" | "flutterwave" | "custom"
+
+export interface IReconciliationRunTotals {
+  providerTotal: number
+  internalTotal: number
+  discrepancyTotal: number
+  remediatedTotal: number
+  matchedCount: number
+  unmatchedCount: number
+}
+
+export interface IReconciliationRunOperator {
+  userId?: Schema.Types.ObjectId
+  userAgent?: string
+  ipAddress?: string
+}
 
 export interface IReconciliationRunMetrics {
   totalProviderRecords: number
@@ -12,13 +28,15 @@ export interface IReconciliationRunMetrics {
 
 export interface IReconciliationRun extends Document {
   runId: string
-  provider: "paystack"
+  provider: ReconciliationProvider
   periodStart: Date
   periodEnd: Date
   status: ReconciliationRunStatus
   startedAt: Date
   completedAt?: Date
   triggeredBy: string
+  operator?: IReconciliationRunOperator
+  totals: IReconciliationRunTotals
   metrics: IReconciliationRunMetrics
   errorMessage?: string
   createdAt: Date
@@ -36,9 +54,10 @@ const ReconciliationRunSchema = new Schema<IReconciliationRun>(
     },
     provider: {
       type: String,
-      enum: ["paystack"],
+      enum: ["paystack", "stripe", "flutterwave", "custom"],
       default: "paystack",
       required: true,
+      index: true,
     },
     periodStart: {
       type: Date,
@@ -68,6 +87,28 @@ const ReconciliationRunSchema = new Schema<IReconciliationRun>(
       default: "system",
       trim: true,
     },
+    operator: {
+      userId: {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+      userAgent: {
+        type: String,
+        trim: true,
+      },
+      ipAddress: {
+        type: String,
+        trim: true,
+      },
+    },
+    totals: {
+      providerTotal: { type: Number, default: 0 },
+      internalTotal: { type: Number, default: 0 },
+      discrepancyTotal: { type: Number, default: 0 },
+      remediatedTotal: { type: Number, default: 0 },
+      matchedCount: { type: Number, default: 0 },
+      unmatchedCount: { type: Number, default: 0 },
+    },
     metrics: {
       totalProviderRecords: { type: Number, default: 0 },
       totalInternalRecords: { type: Number, default: 0 },
@@ -84,6 +125,8 @@ const ReconciliationRunSchema = new Schema<IReconciliationRun>(
 )
 
 ReconciliationRunSchema.index({ periodStart: 1, periodEnd: 1 })
+ReconciliationRunSchema.index({ provider: 1, status: 1 })
+ReconciliationRunSchema.index({ "operator.userId": 1 })
 
 export default (mongoose.models.ReconciliationRun ||
   mongoose.model<IReconciliationRun>(
