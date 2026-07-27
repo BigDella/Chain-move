@@ -1,71 +1,104 @@
-import { NextResponse } from "next/server"
+import {
+  FleetDocumentCreateRequestSchema,
+  FleetDocumentCreateResponseSchema,
+  FleetDocumentListResponseSchema,
+  FleetDocumentQuerySchema,
+} from "@/lib/api/contracts"
+import { buildPaginationMeta } from "@/lib/api/pagination"
+import { defineRoute } from "@/lib/api/route-handler"
+import { serializeDateTime, serializeId } from "@/lib/api/serialization"
 import dbConnect from "@/lib/dbConnect"
-import VehicleDocument from "@/models/VehicleDocument"
 import { evaluateVehicleCompliance } from "@/lib/fleet/complianceService"
+import VehicleDocument from "@/models/VehicleDocument"
 
-export async function GET(request: Request) {
-  try {
-    await dbConnect()
-    const { searchParams } = new URL(request.url)
-    const vehicleId = searchParams.get("vehicleId")
-
-    const filter = vehicleId ? { vehicleId } : {}
-    const documents = await VehicleDocument.find(filter).sort({ expiryDate: 1 }).lean()
-
-    return NextResponse.json({ success: true, documents })
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message || "Failed to fetch vehicle documents" },
-      { status: 500 },
-    )
+/**
+ * Explicit projection. `fileUrl` is intentionally absent: it is a direct blob
+ * link that bypasses per-document authorization, so it must not be listed.
+ */
+function serializeVehicleDocument(document: Record<string, any>) {
+  return {
+    id: serializeId(document._id) as string,
+    vehicleId: serializeId(document.vehicleId) as string,
+    documentType: document.documentType,
+    title: document.title ?? "",
+    documentNumber: document.documentNumber ?? null,
+    issuingAuthority: document.issuingAuthority ?? null,
+    issueDate: serializeDateTime(document.issueDate),
+    expiryDate: serializeDateTime(document.expiryDate),
+    verificationStatus: document.verificationStatus ?? "pending",
+    rejectionReason: document.rejectionReason ?? null,
+    notes: document.notes ?? null,
+    createdAt: serializeDateTime(document.createdAt),
+    updatedAt: serializeDateTime(document.updatedAt),
   }
 }
 
-export async function POST(request: Request) {
-  try {
+export const GET = defineRoute({
+  operationId: "listVehicleDocuments",
+  method: "GET",
+  auth: "authenticated",
+  action: "vehicle:read",
+  resource: () => ({ type: "vehicle" }),
+  query: FleetDocumentQuerySchema,
+  response: FleetDocumentListResponseSchema,
+  successStatus: 200,
+  handler: async ({ query }) => {
     await dbConnect()
-    const body = await request.json()
 
-    const {
-      vehicleId,
-      documentType,
-      title,
-      documentNumber,
-      issuingAuthority,
-      issueDate,
-      expiryDate,
-      fileUrl,
-      notes,
-    } = body
+    const filter: Record<string, unknown> = {}
+    if (query.vehicleId) filter.vehicleId = query.vehicleId
+    if (query.documentType) filter.documentType = query.documentType
 
-    if (!vehicleId || !documentType || !title || !issueDate || !expiryDate) {
-      return NextResponse.json(
-        { success: false, error: "vehicleId, documentType, title, issueDate, and expiryDate are required" },
-        { status: 400 },
-      )
+    const [documents, total] = await Promise.all([
+      VehicleDocument.find(filter)
+        .sort({ expiryDate: 1 })
+        .skip((query.page - 1) * query.pageSize)
+        .limit(query.pageSize)
+        .lean(),
+      VehicleDocument.countDocuments(filter),
+    ])
+
+    return {
+      success: true as const,
+      documents: documents.map(serializeVehicleDocument),
+      pagination: buildPaginationMeta({ page: query.page, pageSize: query.pageSize, total }),
     }
+  },
+})
 
-    const doc = await VehicleDocument.create({
-      vehicleId,
-      documentType,
-      title,
-      documentNumber,
-      issuingAuthority,
-      issueDate: new Date(issueDate),
-      expiryDate: new Date(expiryDate),
-      fileUrl,
-      notes,
+export const POST = defineRoute({
+  operationId: "createVehicleDocument",
+  method: "POST",
+  auth: "authenticated",
+  action: "vehicle:manage",
+  resource: () => ({ type: "vehicle" }),
+  body: FleetDocumentCreateRequestSchema,
+  response: FleetDocumentCreateResponseSchema,
+  successStatus: 201,
+  handler: async ({ body }) => {
+    await dbConnect()
+
+    const created = await VehicleDocument.create({
+      vehicleId: body.vehicleId,
+      documentType: body.documentType,
+      title: body.title,
+      documentNumber: body.documentNumber,
+      issuingAuthority: body.issuingAuthority,
+      issueDate: new Date(body.issueDate),
+      expiryDate: new Date(body.expiryDate),
+      fileUrl: body.fileUrl,
+      notes: body.notes,
+      // Preserves existing behaviour. Auto-verifying a self-attested compliance
+      // document is a control weakness, but changing it is a fleet-workflow
+      // decision rather than an API-contract one.
       verificationStatus: "verified",
     })
 
-    // Re-evaluate vehicle compliance
-    await evaluateVehicleCompliance(vehicleId)
+    await evaluateVehicleCompliance(body.vehicleId)
 
-    return NextResponse.json({ success: true, document: doc }, { status: 201 })
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message || "Failed to create vehicle document" },
-      { status: 500 },
-    )
-  }
-}
+    return {
+      success: true as const,
+      document: serializeVehicleDocument(created.toObject()),
+    }
+  },
+})

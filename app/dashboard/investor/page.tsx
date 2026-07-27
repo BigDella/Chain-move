@@ -25,11 +25,18 @@ import { mockAccount } from "@/lib/mock-stellar/mockAccount"
 import { mockActivity } from "@/lib/mock-stellar/mockActivity"
 import { CURRENT_EMBEDDED_WALLET } from "@/lib/wallet/config"
 
+/** Canonical money envelope from the API. See docs/api-conventions.md. */
+interface Money {
+  currency: string
+  amountMinor: number
+  amountMajor: number
+}
+
 type PoolPreview = {
   id: string
   assetType: "SHUTTLE" | "KEKE"
-  targetAmountNgn: number
-  currentRaisedNgn: number
+  targetAmount: Money
+  currentRaised: Money
   investorCount: number
   status: "OPEN" | "FUNDED" | "CLOSED"
   progressRatio: number
@@ -225,7 +232,7 @@ export default function InvestorOverviewPage() {
     }
 
     return openPools.slice(0, 2).map((pool) => {
-      const principalAmount = pool.currentRaisedNgn > 0 ? pool.currentRaisedNgn : pool.targetAmountNgn
+      const principalAmount = pool.currentRaised.amountMajor > 0 ? pool.currentRaised.amountMajor : pool.targetAmount.amountMajor
       const monthlyReturns = Math.round(principalAmount * 0.1)
       const progressMonths = Math.max(1, Math.round(Math.min(pool.progressRatio, 1) * 24))
 
