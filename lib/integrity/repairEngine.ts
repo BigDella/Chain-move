@@ -10,6 +10,7 @@ import HirePurchaseContract from "@/models/HirePurchaseContract"
 import User from "@/models/User"
 import Transaction from "@/models/Transaction"
 import AuditLog from "@/models/AuditLog"
+import { transitionHirePurchaseContract } from "@/lib/services/contract-transition.service"
 import { INVARIANT_CATALOG } from "./catalog"
 
 export interface RepairPreview {
@@ -253,7 +254,20 @@ export async function applyRepair(
       }
 
       case "REOPEN_OR_RECONCILE_CONTRACT":
-        await HirePurchaseContract.findByIdAndUpdate(finding.primaryId, { status: "ACTIVE" }, opts)
+        if (session) {
+          await transitionHirePurchaseContract({
+            contractId: String(finding.primaryId),
+            targetState: "ACTIVE",
+            actor: { type: "system" },
+            reason: `Data-integrity repair (${finding.ruleId}): COMPLETED contract has an outstanding payable balance.`,
+            session,
+          })
+        } else {
+          // No replica set available (single-node Mongo) — transactions/version
+          // checks are unavailable here, so fall back to a direct write as this
+          // repair already did before the state machine existed.
+          await HirePurchaseContract.findByIdAndUpdate(finding.primaryId, { status: "ACTIVE" }, opts)
+        }
         break
 
       case "SYNC_LEGACY_USER_FIELDS": {

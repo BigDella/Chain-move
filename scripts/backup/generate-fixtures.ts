@@ -156,7 +156,7 @@ function generatePoolInvestments(rand: () => number): Record<string, unknown>[] 
 
 function generateHirePurchaseContracts(rand: () => number): Record<string, unknown>[] {
   const contracts: Record<string, unknown>[] = []
-  const statuses = ["ACTIVE", "COMPLETED", "DEFAULTED"]
+  const statuses = ["ACTIVE", "COMPLETED", "DELINQUENT"]
 
   for (let i = 0; i < 4; i++) {
     contracts.push({

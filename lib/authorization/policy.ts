@@ -1,4 +1,5 @@
 import type { AppUserRole } from "@/lib/api/route-guard"
+import { isRepayableState } from "@/lib/contracts/state-machine"
 
 export const AUTHORIZATION_ACTIONS = [
   "account:read", "account:update", "activity:read", "activity:update",
@@ -60,7 +61,7 @@ export function authorize(context: AuthorizationContext, action: AuthorizationAc
   if (action.startsWith("investment:") && principal.role !== "investor") return { allowed: false, reason: "role_denied", conceal: false }
   if ((action.startsWith("loan:") || action.startsWith("contract:") || action.startsWith("repayment:")) && principal.role !== "driver") return { allowed: false, reason: "role_denied", conceal: false }
   if (ownerActions.has(action) && resource.ownerId !== principal.id) return { allowed: false, reason: "not_owner", conceal: true }
-  if (action === "repayment:record" && resource.state !== "ACTIVE") return { allowed: false, reason: "invalid_state", conceal: false }
+  if (action === "repayment:record" && !isRepayableState(resource.state)) return { allowed: false, reason: "invalid_state", conceal: false }
   if (action === "vehicle:manage" || action.startsWith("admin:") || action === "kyc:review" || action === "email:send") return { allowed: false, reason: "role_denied", conceal: false }
   return { allowed: true }
 }

@@ -1,26 +1,25 @@
 import mongoose, { type ClientSession } from "mongoose"
 
 import dbConnect from "@/lib/dbConnect"
+import { isRepayableState } from "@/lib/contracts/state-machine"
+import {
+  buildRepaymentSchedule,
+  clampToNonNegative,
+  type DriverRepaymentScheduleItem,
+  type RepaymentScheduleStatus,
+} from "@/lib/contracts/repayment-schedule"
+import { transitionHirePurchaseContract } from "@/lib/services/contract-transition.service"
 import DriverPayment from "@/models/DriverPayment"
-import HirePurchaseContract from "@/models/HirePurchaseContract"
+import HirePurchaseContract, { HirePurchaseContractStatus } from "@/models/HirePurchaseContract"
 import InvestorCredit from "@/models/InvestorCredit"
 import PoolInvestment from "@/models/PoolInvestment"
 import Transaction from "@/models/Transaction"
 import User from "@/models/User"
 
-type ContractStatus = "ACTIVE" | "COMPLETED" | "DEFAULTED"
+type ContractStatus = HirePurchaseContractStatus
 type DriverPaymentStatus = "PENDING" | "CONFIRMED" | "FAILED"
 
-export type RepaymentScheduleStatus = "PAID" | "PARTIAL" | "LATE" | "UPCOMING"
-
-export interface DriverRepaymentScheduleItem {
-  installmentNumber: number
-  dueDate: string
-  expectedAmountNgn: number
-  paidAmountNgn: number
-  remainingAmountNgn: number
-  status: RepaymentScheduleStatus
-}
+export type { RepaymentScheduleStatus, DriverRepaymentScheduleItem }
 
 export interface DriverArrearsSummary {
   status: "CURRENT" | "LATE" | "COMPLETED"
@@ -121,11 +120,6 @@ function toIsoDate(value: Date | string | null | undefined) {
   return date.toISOString()
 }
 
-function clampToNonNegative(value: number) {
-  if (!Number.isFinite(value)) return 0
-  return Math.max(value, 0)
-}
-
 function computeRemainingBalance(totalPayableNgn: number, totalPaidNgn: number) {
   return Math.max(totalPayableNgn - totalPaidNgn, 0)
 }
@@ -135,54 +129,8 @@ function computeProgressRatio(totalPayableNgn: number, totalPaidNgn: number) {
   return Math.min(Math.max(totalPaidNgn / totalPayableNgn, 0), 1)
 }
 
-function buildRepaymentSchedule(contract: {
-  startDate: Date | string
-  weeklyPaymentNgn: number
-  durationWeeks: number
-  totalPaidNgn: number
-  totalPayableNgn: number
-}, now = new Date()): DriverRepaymentScheduleItem[] {
-  const startDate = new Date(contract.startDate)
-  const weeklyPaymentNgn = clampToNonNegative(Number(contract.weeklyPaymentNgn || 0))
-  const durationWeeks = Math.max(0, Math.floor(Number(contract.durationWeeks || 0)))
-  const totalPayableNgn = clampToNonNegative(Number(contract.totalPayableNgn || 0))
-  let remainingPaidNgn = clampToNonNegative(Number(contract.totalPaidNgn || 0))
-
-  if (Number.isNaN(startDate.getTime()) || weeklyPaymentNgn <= 0 || durationWeeks <= 0 || totalPayableNgn <= 0) {
-    return []
-  }
-
-  return Array.from({ length: durationWeeks }, (_, index) => {
-    const installmentNumber = index + 1
-    const dueDate = new Date(startDate)
-    dueDate.setDate(dueDate.getDate() + installmentNumber * 7)
-    const scheduledCap = index === durationWeeks - 1 ? totalPayableNgn - weeklyPaymentNgn * index : weeklyPaymentNgn
-    const expectedAmountNgn = clampToNonNegative(Math.min(weeklyPaymentNgn, scheduledCap))
-    const paidAmountNgn = Math.min(expectedAmountNgn, remainingPaidNgn)
-    remainingPaidNgn = clampToNonNegative(remainingPaidNgn - paidAmountNgn)
-    const remainingAmountNgn = clampToNonNegative(expectedAmountNgn - paidAmountNgn)
-    const isPastDue = dueDate.getTime() < now.getTime()
-    const status: RepaymentScheduleStatus = remainingAmountNgn <= 0
-      ? "PAID"
-      : isPastDue && paidAmountNgn > 0
-        ? "PARTIAL"
-        : isPastDue
-          ? "LATE"
-          : "UPCOMING"
-
-    return {
-      installmentNumber,
-      dueDate: dueDate.toISOString(),
-      expectedAmountNgn,
-      paidAmountNgn,
-      remainingAmountNgn,
-      status,
-    }
-  })
-}
-
 function computeArrearsSummary(schedule: DriverRepaymentScheduleItem[], contractStatus: ContractStatus): DriverArrearsSummary {
-  if (contractStatus === "COMPLETED") {
+  if (!isRepayableState(contractStatus)) {
     return { status: "COMPLETED", overdueInstallments: 0, arrearsAmountNgn: 0, oldestOverdueDate: null }
   }
 
@@ -313,7 +261,7 @@ export async function getDriverContract(driverUserId: string): Promise<DriverCon
 
   const activeContract = await HirePurchaseContract.findOne({
     driverUserId: driverObjectId,
-    status: "ACTIVE",
+    status: { $in: ["ACTIVE", "DELINQUENT", "RESTRUCTURED"] },
   })
     .sort({ createdAt: -1 })
     .lean()
@@ -324,7 +272,7 @@ export async function getDriverContract(driverUserId: string): Promise<DriverCon
 
   const latestHistoricalContract = await HirePurchaseContract.findOne({
     driverUserId: driverObjectId,
-    status: { $in: ["COMPLETED", "DEFAULTED"] },
+    status: { $in: ["COMPLETED", "REPOSSESSED", "CANCELLED", "CLOSED"] },
   })
     .sort({ updatedAt: -1 })
     .lean()
@@ -392,7 +340,7 @@ export async function createDriverPayment({
     throw new Error("Contract not found.")
   }
 
-  if (contract.status !== "ACTIVE") {
+  if (!isRepayableState(contract.status)) {
     throw new Error("This hire-purchase contract is not active.")
   }
 
@@ -457,7 +405,7 @@ export async function createDriverTransferPayment({
     throw new Error("Contract not found.")
   }
 
-  if (contract.status !== "ACTIVE") {
+  if (!isRepayableState(contract.status)) {
     throw new Error("This hire-purchase contract is not active.")
   }
 
@@ -741,7 +689,7 @@ export async function confirmDriverPayment(
       throw new Error(payment.failedReason || "This payment has already failed.")
     }
 
-    if (contract.status !== "ACTIVE") {
+    if (!isRepayableState(contract.status)) {
       throw new Error("This contract is not active.")
     }
 
@@ -776,9 +724,20 @@ export async function confirmDriverPayment(
 
     contract.totalPaidNgn = clampToNonNegative(Number(contract.totalPaidNgn || 0) + appliedAmountNgn)
     const remainingAfterNgn = computeRemainingBalance(contract.totalPayableNgn, contract.totalPaidNgn)
-    contract.status = remainingAfterNgn <= 0 ? "COMPLETED" : "ACTIVE"
-    contract.nextDueDate = contract.status === "COMPLETED" ? null : calculateNextDueDate(contract as any)
+    contract.nextDueDate = remainingAfterNgn <= 0 ? null : calculateNextDueDate(contract as any)
     await contract.save({ session })
+
+    if (remainingAfterNgn <= 0 && contract.status !== "COMPLETED") {
+      const { contract: settledContract } = await transitionHirePurchaseContract({
+        contractId: contract._id.toString(),
+        targetState: "COMPLETED",
+        actor: { type: "system" },
+        reason: "Final repayment installment confirmed; payable balance fully settled.",
+        metadata: { paystackRef: normalizedReference },
+        session,
+      })
+      contract.status = settledContract.status
+    }
 
     const existingRepaymentTx = await Transaction.findOne({
       gatewayReference: normalizedReference,

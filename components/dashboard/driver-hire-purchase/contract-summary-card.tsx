@@ -23,7 +23,7 @@ function formatDateLabel(value: string | null) {
 
 export function ContractSummaryCard({ contract, className }: ContractSummaryCardProps) {
   const isCompleted = contract.status === "COMPLETED"
-  const isDefaulted = contract.status === "DEFAULTED"
+  const isDefaulted = contract.status === "DELINQUENT" || contract.status === "REPOSSESSED"
   const progressPercent = Math.round(contract.progressRatio * 100)
 
   return (
