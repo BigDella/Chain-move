@@ -30,6 +30,7 @@ export interface RepairResult {
   status: string
   appliedChanges?: Record<string, unknown>
   compensationPlan?: string
+  auditLogId?: string
   error?: string
 }
 
@@ -230,7 +231,15 @@ export async function applyRepair(
         const newBal = preview.proposedChanges.availableBalance as number
         const adj = preview.proposedChanges.adjustmentTransaction as { type: string; amount: number; description: string }
 
-        if (adj && adj.amount > 0) {
+        // Idempotency guard: if a prior attempt already posted the
+        // compensating transaction but failed before the finding could be
+        // marked REPAIRED, reuse it instead of double-adjusting the balance.
+        const existingAdjustment = await Transaction.findOne({
+          userId: finding.primaryId,
+          "metadata.findingFingerprint": finding.fingerprint,
+        }).session(session)
+
+        if (adj && adj.amount > 0 && !existingAdjustment) {
           const user = await User.findById(finding.primaryId).lean()
           await Transaction.create(
             [
@@ -283,7 +292,7 @@ export async function applyRepair(
     }
 
     // Log audit event
-    await AuditLog.create(
+    const [auditEntry] = await AuditLog.create(
       [
         {
           actorRole: "admin",
@@ -320,6 +329,7 @@ export async function applyRepair(
       status: "REPAIRED",
       appliedChanges: preview.proposedChanges,
       compensationPlan: preview.compensationPlan,
+      auditLogId: auditEntry?._id?.toString(),
     }
   } catch (error: any) {
     if (session) {
