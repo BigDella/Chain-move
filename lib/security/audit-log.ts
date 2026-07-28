@@ -21,6 +21,7 @@ const DEFAULT_CRITICAL_ACTION_PATTERNS = [
   "loan",
   "asset",
   "investment",
+  "contract",
   "admin",
   "user.role",
   "notification.broadcast",

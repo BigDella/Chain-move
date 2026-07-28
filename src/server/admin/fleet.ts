@@ -15,7 +15,17 @@ export type VehicleStatus =
   | "Maintenance"
   | "Retired"
 
-export type ContractStatus = "ACTIVE" | "COMPLETED" | "DEFAULTED"
+export type ContractStatus =
+  | "PENDING_APPROVAL"
+  | "APPROVED"
+  | "VEHICLE_ASSIGNED"
+  | "ACTIVE"
+  | "DELINQUENT"
+  | "RESTRUCTURED"
+  | "COMPLETED"
+  | "REPOSSESSED"
+  | "CANCELLED"
+  | "CLOSED"
 
 // Map the raw Vehicle.status enum to an operations-facing label.
 export function normalizeVehicleStatus(status?: string | null): FleetStatusLabel {
@@ -36,8 +46,8 @@ export function vehicleStatusBadgeClass(label: FleetStatusLabel): string {
 export function contractStatusBadgeClass(status?: string | null): string {
   const value = (status || "").toUpperCase()
   if (value === "COMPLETED") return "bg-green-600 text-white hover:bg-green-600"
-  if (value === "DEFAULTED") return "bg-red-600 text-white hover:bg-red-600"
-  if (value === "ACTIVE") return "bg-blue-600 text-white hover:bg-blue-600"
+  if (value === "DELINQUENT" || value === "REPOSSESSED") return "bg-red-600 text-white hover:bg-red-600"
+  if (value === "ACTIVE" || value === "RESTRUCTURED") return "bg-blue-600 text-white hover:bg-blue-600"
   return "bg-zinc-600 text-white hover:bg-zinc-600"
 }
 
@@ -56,7 +66,8 @@ export function repaymentPercent(
 
 // Colour for the repayment progress bar based on completion + contract health.
 export function repaymentBarClass(percent: number, status?: string | null): string {
-  if ((status || "").toUpperCase() === "DEFAULTED") return "bg-red-500"
+  const value = (status || "").toUpperCase()
+  if (value === "DELINQUENT" || value === "REPOSSESSED") return "bg-red-500"
   if (percent >= 100) return "bg-green-500"
   if (percent >= 50) return "bg-blue-500"
   return "bg-amber-500"
@@ -69,6 +80,6 @@ export function pickOperationalContract<T extends { status?: string }>(
   contracts: T[],
 ): T | null {
   if (contracts.length === 0) return null
-  const active = contracts.find((c) => (c.status || "").toUpperCase() === "ACTIVE")
-  return active ?? contracts[0]
+  const current = contracts.find((c) => ["ACTIVE", "DELINQUENT", "RESTRUCTURED"].includes((c.status || "").toUpperCase()))
+  return current ?? contracts[0]
 }
