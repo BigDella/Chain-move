@@ -1,4 +1,5 @@
 import crypto from "crypto"
+import mongoose from "mongoose"
 import dbConnect from "@/lib/dbConnect"
 import ReconciliationRun, {
   IReconciliationRun,
@@ -594,12 +595,83 @@ export async function runReconciliationWithNormalizedData(
   })
 }
 
+export type RemediationAction =
+  | "RECONCILE_CREATE_TRANSACTION"
+  | "RECONCILE_POST_REVERSAL"
+  | "RECONCILE_UPDATE_STATUS"
+  | "IGNORE"
+
+export interface RemediationPreview {
+  discrepancyId: string
+  category: DiscrepancyCategory
+  action: RemediationAction
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+
+const CORRECTION_DESCRIPTION_PREFIX = "Reconciliation correction for missing Paystack reference"
+
+/**
+ * Computes the before/after preview for a remediation action without
+ * mutating any state. Used by the maker-checker approval flow to show a
+ * requester and approver exactly what a remediation will do before it runs.
+ */
+export async function previewRemediation(
+  discrepancyId: string,
+  action: RemediationAction,
+): Promise<RemediationPreview> {
+  await dbConnect()
+
+  const discrepancy = await ReconciliationDiscrepancy.findById(discrepancyId).lean()
+  if (!discrepancy) {
+    throw new Error(`Reconciliation discrepancy ${discrepancyId} not found`)
+  }
+  if (discrepancy.remediationStatus !== "unresolved") {
+    throw new Error(`Discrepancy ${discrepancyId} is already resolved (${discrepancy.remediationStatus})`)
+  }
+
+  const before: Record<string, unknown> = {
+    remediationStatus: discrepancy.remediationStatus,
+    category: discrepancy.category,
+    providerReference: discrepancy.providerReference ?? null,
+    providerAmount: discrepancy.providerAmount ?? null,
+    internalTransactionId: discrepancy.internalTransactionId ?? null,
+  }
+  const after: Record<string, unknown> = {
+    remediationStatus: action === "IGNORE" ? "ignored" : "manually_resolved",
+  }
+
+  if (action === "RECONCILE_CREATE_TRANSACTION" && discrepancy.category === "MISSING_INTERNAL_RECORD") {
+    after.newTransaction = {
+      type: "wallet_funding",
+      amount: discrepancy.providerAmount || 0,
+      currency: discrepancy.providerCurrency || "NGN",
+      gatewayReference: discrepancy.providerReference ?? null,
+    }
+  } else if (action === "RECONCILE_POST_REVERSAL" && discrepancy.internalTransactionId) {
+    const origTx = await Transaction.findById(discrepancy.internalTransactionId).lean()
+    after.reversalTransaction = {
+      type: "wallet_debit",
+      amount: discrepancy.providerAmount || origTx?.amount || 0,
+      relatedId: discrepancy.internalTransactionId,
+    }
+  } else if (action === "RECONCILE_UPDATE_STATUS" && discrepancy.internalTransactionId) {
+    after.transactionStatus = discrepancy.providerStatus === "success" ? "Completed" : "Failed"
+  }
+
+  return { discrepancyId, category: discrepancy.category, action, before, after }
+}
+
 /**
  * Safely remediates a discrepancy with elevated authorization and immutable counter-adjustment audit history.
+ *
+ * Runs inside a Mongoose session/transaction when the deployment's MongoDB
+ * supports one (replica set); falls back to sequential writes on a
+ * standalone instance, matching the pattern in `lib/integrity/repairEngine.ts`.
  */
 export async function remediateDiscrepancy(
   discrepancyId: string,
-  action: "RECONCILE_CREATE_TRANSACTION" | "RECONCILE_POST_REVERSAL" | "RECONCILE_UPDATE_STATUS" | "IGNORE",
+  action: RemediationAction,
   reviewerUserId: string,
   notes: string,
 ): Promise<IReconciliationDiscrepancy> {
@@ -614,85 +686,138 @@ export async function remediateDiscrepancy(
     throw new Error(`Discrepancy ${discrepancyId} is already resolved (${discrepancy.remediationStatus})`)
   }
 
-  let auditAction = ""
-
-  if (action === "RECONCILE_CREATE_TRANSACTION") {
-    if (discrepancy.category === "MISSING_INTERNAL_RECORD") {
-      const systemUser = await User.findOne({ role: "admin" })
-      const userId = systemUser ? systemUser._id : reviewerUserId
-
-      const newTx = await Transaction.create({
-        userId,
-        userType: "admin",
-        type: "wallet_funding",
-        amount: discrepancy.providerAmount || 0,
-        currency: discrepancy.providerCurrency || "NGN",
-        method: "paystack",
-        gatewayReference: discrepancy.providerReference,
-        description: `Reconciliation correction for missing Paystack reference ${discrepancy.providerReference}`,
-        status: "Completed",
-        timestamp: new Date(),
-      })
-
-      discrepancy.internalTransactionId = newTx._id.toString()
-      auditAction = `RECONCILE_CREATE_TRANSACTION: Created transaction ${newTx._id}`
-    }
-  } else if (action === "RECONCILE_POST_REVERSAL") {
-    if (discrepancy.internalTransactionId) {
-      const origTx = await Transaction.findById(discrepancy.internalTransactionId)
-      if (origTx) {
-        const revTx = await Transaction.create({
-          userId: origTx.userId,
-          userType: origTx.userType,
-          type: "wallet_debit",
-          amount: discrepancy.providerAmount || origTx.amount,
-          currency: origTx.currency || "NGN",
-          method: "system",
-          gatewayReference: `REV-${discrepancy.providerReference || origTx.gatewayReference}`,
-          description: `Reconciliation reversal counter-adjustment for ${discrepancy.providerReference || origTx._id}`,
-          status: "Completed",
-          relatedId: origTx._id.toString(),
-          timestamp: new Date(),
-        })
-
-        auditAction = `RECONCILE_POST_REVERSAL: Posted counter-debit transaction ${revTx._id}`
-      }
-    }
-  } else if (action === "RECONCILE_UPDATE_STATUS") {
-    if (discrepancy.internalTransactionId) {
-      const tx = await Transaction.findById(discrepancy.internalTransactionId)
-      if (tx) {
-        tx.status = discrepancy.providerStatus === "success" ? "Completed" : "Failed"
-        await tx.save()
-        auditAction = `RECONCILE_UPDATE_STATUS: Updated transaction ${tx._id} status to ${tx.status}`
-      }
-    }
-  } else if (action === "IGNORE") {
-    auditAction = "IGNORE: Marked discrepancy as ignored by reviewer"
+  let session: mongoose.ClientSession | null = null
+  try {
+    session = await mongoose.startSession()
+    session.startTransaction()
+  } catch {
+    session = null
   }
 
-  const auditEntry = await AuditLog.create({
-    userId: reviewerUserId,
-    action: "RECONCILIATION_REMEDIATE",
-    targetModel: "ReconciliationDiscrepancy",
-    targetId: discrepancy._id,
-    details: {
-      action,
-      category: discrepancy.category,
-      providerReference: discrepancy.providerReference,
-      notes,
-      auditAction,
-    },
-    timestamp: new Date(),
-  })
+  try {
+    const opts = session ? { session } : {}
+    let auditAction = ""
 
-  discrepancy.remediationStatus = action === "IGNORE" ? "ignored" : "manually_resolved"
-  discrepancy.resolutionNotes = notes
-  discrepancy.resolvedByUserId = reviewerUserId as any
-  discrepancy.resolvedAt = new Date()
-  discrepancy.resolutionAction = auditAction
-  discrepancy.auditLogId = auditEntry._id as any
+    if (action === "RECONCILE_CREATE_TRANSACTION") {
+      if (discrepancy.category === "MISSING_INTERNAL_RECORD") {
+        // Idempotency guard: if a prior attempt already created the correction
+        // transaction but failed before the discrepancy could be saved as
+        // resolved, reuse it instead of posting a duplicate credit.
+        const existingTx = discrepancy.providerReference
+          ? await Transaction.findOne({
+              gatewayReference: discrepancy.providerReference,
+              description: `${CORRECTION_DESCRIPTION_PREFIX} ${discrepancy.providerReference}`,
+            }).session(session)
+          : null
 
-  await discrepancy.save()
-  return discrepancy
+        if (existingTx) {
+          discrepancy.internalTransactionId = existingTx._id.toString()
+          auditAction = `RECONCILE_CREATE_TRANSACTION: Reused existing transaction ${existingTx._id}`
+        } else {
+          const systemUser = await User.findOne({ role: "admin" }).session(session)
+          const userId = systemUser ? systemUser._id : reviewerUserId
+
+          const [newTx] = await Transaction.create(
+            [
+              {
+                userId,
+                userType: "admin",
+                type: "wallet_funding",
+                amount: discrepancy.providerAmount || 0,
+                currency: discrepancy.providerCurrency || "NGN",
+                method: "paystack",
+                gatewayReference: discrepancy.providerReference,
+                description: `${CORRECTION_DESCRIPTION_PREFIX} ${discrepancy.providerReference}`,
+                status: "Completed",
+                timestamp: new Date(),
+              },
+            ],
+            opts,
+          )
+
+          discrepancy.internalTransactionId = newTx._id.toString()
+          auditAction = `RECONCILE_CREATE_TRANSACTION: Created transaction ${newTx._id}`
+        }
+      }
+    } else if (action === "RECONCILE_POST_REVERSAL") {
+      if (discrepancy.internalTransactionId) {
+        const origTx = await Transaction.findById(discrepancy.internalTransactionId).session(session)
+        if (origTx) {
+          const [revTx] = await Transaction.create(
+            [
+              {
+                userId: origTx.userId,
+                userType: origTx.userType,
+                type: "wallet_debit",
+                amount: discrepancy.providerAmount || origTx.amount,
+                currency: origTx.currency || "NGN",
+                method: "system",
+                gatewayReference: `REV-${discrepancy.providerReference || origTx.gatewayReference}`,
+                description: `Reconciliation reversal counter-adjustment for ${discrepancy.providerReference || origTx._id}`,
+                status: "Completed",
+                relatedId: origTx._id.toString(),
+                timestamp: new Date(),
+              },
+            ],
+            opts,
+          )
+
+          auditAction = `RECONCILE_POST_REVERSAL: Posted counter-debit transaction ${revTx._id}`
+        }
+      }
+    } else if (action === "RECONCILE_UPDATE_STATUS") {
+      if (discrepancy.internalTransactionId) {
+        const tx = await Transaction.findById(discrepancy.internalTransactionId).session(session)
+        if (tx) {
+          tx.status = discrepancy.providerStatus === "success" ? "Completed" : "Failed"
+          await tx.save(opts)
+          auditAction = `RECONCILE_UPDATE_STATUS: Updated transaction ${tx._id} status to ${tx.status}`
+        }
+      }
+    } else if (action === "IGNORE") {
+      auditAction = "IGNORE: Marked discrepancy as ignored by reviewer"
+    }
+
+    const [auditEntry] = await AuditLog.create(
+      [
+        {
+          userId: reviewerUserId,
+          action: "RECONCILIATION_REMEDIATE",
+          targetModel: "ReconciliationDiscrepancy",
+          targetId: discrepancy._id,
+          details: {
+            action,
+            category: discrepancy.category,
+            providerReference: discrepancy.providerReference,
+            notes,
+            auditAction,
+          },
+          timestamp: new Date(),
+        },
+      ],
+      opts,
+    )
+
+    discrepancy.remediationStatus = action === "IGNORE" ? "ignored" : "manually_resolved"
+    discrepancy.resolutionNotes = notes
+    discrepancy.resolvedByUserId = reviewerUserId as any
+    discrepancy.resolvedAt = new Date()
+    discrepancy.resolutionAction = auditAction
+    discrepancy.auditLogId = auditEntry._id as any
+
+    await discrepancy.save(opts)
+
+    if (session) {
+      await session.commitTransaction()
+      session.endSession()
+    }
+
+    return discrepancy
+  } catch (error) {
+    if (session) {
+      await session.abortTransaction()
+      session.endSession()
+    }
+    throw error
+  }
 }
