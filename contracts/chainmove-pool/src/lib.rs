@@ -56,11 +56,16 @@ pub struct InvestorPosition {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransitionEvent {
+    pub version: u32,
     pub asset: Address,
     pub amount: i128,
     pub pool_id: u64,
     pub position_id: Address,
+    pub actor: Address,
     pub reference: String,
+    pub post_funded_units: u64,
+    pub post_total_invested: i128,
+    pub post_total_repaid: i128,
 }
 
 #[contracttype]
@@ -133,6 +138,20 @@ impl ChainMovePoolContract {
 
         env.storage().persistent().set(&key, &pool);
         env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        publish_transition(
+            &env,
+            Symbol::new(&env, "pool_created_v1"),
+            &asset,
+            target_amount,
+            pool_id,
+            owner.clone(),
+            owner.clone(),
+            String::from_str(&env, "genesis"),
+            0,
+            0,
+            0,
+        );
 
         Ok(pool)
     }
@@ -230,8 +249,12 @@ impl ChainMovePoolContract {
             &pool.asset,
             amount,
             pool_id,
+            investor.clone(),
             investor,
             reference,
+            pool.funded_units,
+            pool.total_invested,
+            pool.total_repaid,
         );
 
         Ok(position)
@@ -321,7 +344,11 @@ impl ChainMovePoolContract {
             amount,
             pool_id,
             investor,
+            payer,
             reference,
+            pool.funded_units,
+            pool.total_invested,
+            pool.total_repaid,
         );
 
         Ok(position)
@@ -406,7 +433,11 @@ impl ChainMovePoolContract {
             amount,
             pool_id,
             investor,
+            owner,
             reference,
+            pool.funded_units,
+            pool.total_invested,
+            pool.total_repaid,
         );
 
         Ok(position)
@@ -435,6 +466,21 @@ impl ChainMovePoolContract {
         pool.active = false;
         env.storage().persistent().set(&key, &pool);
         env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        publish_transition(
+            &env,
+            Symbol::new(&env, "pool_closed_v1"),
+            &pool.asset,
+            0,
+            pool_id,
+            owner.clone(),
+            owner,
+            String::from_str(&env, "pool_closed"),
+            pool.funded_units,
+            pool.total_invested,
+            pool.total_repaid,
+        );
+
         Ok(pool)
     }
 
@@ -649,16 +695,25 @@ fn publish_transition(
     amount: i128,
     pool_id: u64,
     position_id: Address,
+    actor: Address,
     reference: String,
+    post_funded_units: u64,
+    post_total_invested: i128,
+    post_total_repaid: i128,
 ) {
     env.events().publish(
         (Symbol::new(env, "chainmove_pool_v1"), event_name),
         TransitionEvent {
+            version: 1,
             asset: asset.clone(),
             amount,
             pool_id,
             position_id,
+            actor,
             reference,
+            post_funded_units,
+            post_total_invested,
+            post_total_repaid,
         },
     );
 }
