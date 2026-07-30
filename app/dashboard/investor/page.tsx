@@ -244,7 +244,7 @@ export default function InvestorDashboardPage() {
       const payload = await response.json()
       const balanceHex = payload?.result
       if (typeof balanceHex === "string") {
-        const parsed = Number.parseFloat(window.BigInt ? String(Number(balanceHex) / 1e18) : "0")
+        const parsed = Number.parseFloat(typeof window.BigInt === "function" ? String(Number(balanceHex) / 1e18) : "0")
         setOnchainBalanceEth(parsed)
       }
     } catch {
