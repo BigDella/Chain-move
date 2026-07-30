@@ -1,10 +1,22 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env,
+    contract, contracterror, contractimpl, contracttype, Address, Env, Symbol,
 };
 
 #[contract]
 pub struct RepaymentContract;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepaymentTransitionEvent {
+    pub version: u32,
+    pub driver: Address,
+    pub pool_or_vehicle: Address,
+    pub actor: Address,
+    pub amount: i128,
+    pub post_total_owed: i128,
+    pub post_total_repaid: i128,
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,6 +69,18 @@ impl RepaymentContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().extend_ttl(RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        publish_repayment_transition(
+            &env,
+            Symbol::new(&env, "repayment_init_v1"),
+            admin.clone(),
+            admin.clone(),
+            admin.clone(),
+            0,
+            0,
+            0,
+        );
+
         Ok(())
     }
 
@@ -87,9 +111,20 @@ impl RepaymentContract {
             active: true,
         };
 
-        let key = DataKey::DriverState(driver);
+        let key = DataKey::DriverState(driver.clone());
         env.storage().persistent().set(&key, &state);
         env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        publish_repayment_transition(
+            &env,
+            Symbol::new(&env, "driver_assigned_v1"),
+            driver,
+            pool_or_vehicle,
+            admin,
+            total_owed,
+            total_owed,
+            0,
+        );
 
         Ok(())
     }
@@ -135,6 +170,17 @@ impl RepaymentContract {
 
         env.storage().persistent().set(&key, &state);
         env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        publish_repayment_transition(
+            &env,
+            Symbol::new(&env, "repayment_recorded_v1"),
+            driver,
+            state.pool_or_vehicle.clone(),
+            caller,
+            amount,
+            state.total_owed,
+            state.total_repaid,
+        );
 
         // Compute dynamic summary
         let outstanding_balance = if state.total_repaid >= state.total_owed {
@@ -191,6 +237,30 @@ impl RepaymentContract {
             active: state.active,
         })
     }
+}
+
+fn publish_repayment_transition(
+    env: &Env,
+    event_name: Symbol,
+    driver: Address,
+    pool_or_vehicle: Address,
+    actor: Address,
+    amount: i128,
+    post_total_owed: i128,
+    post_total_repaid: i128,
+) {
+    env.events().publish(
+        (Symbol::new(env, "repayment_v1"), event_name),
+        RepaymentTransitionEvent {
+            version: 1,
+            driver,
+            pool_or_vehicle,
+            actor,
+            amount,
+            post_total_owed,
+            post_total_repaid,
+        },
+    );
 }
 
 #[cfg(test)]
