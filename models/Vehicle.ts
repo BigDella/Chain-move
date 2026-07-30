@@ -23,6 +23,9 @@ export interface IVehicle extends Document {
   driverId?: Schema.Types.ObjectId;
   fundingStatus: 'Open' | 'Funded' | 'Active'; // Tracks the investment state
   totalFundedAmount: number;
+  complianceStatus?: 'compliant' | 'warning' | 'non_compliant' | 'uninspected';
+  currentOdometerKm?: number;
+  hasActiveDowntime?: boolean;
 }
 
 const VehicleSchema: Schema = new Schema({
@@ -45,7 +48,7 @@ const VehicleSchema: Schema = new Schema({
     mileage: { type: String },
     transmission: { type: String },
     color: { type: String },
-    vin: { type: String, unique: true },
+    vin: { type: String, unique: true, sparse: true },
   },
   addedDate: { type: Date, default: Date.now },
   popularity: { type: Number, default: 0 },
@@ -56,6 +59,14 @@ const VehicleSchema: Schema = new Schema({
     default: 'Open', // Starts as open for investment
   },
   totalFundedAmount: { type: Number, default: 0 },
+  complianceStatus: {
+    type: String,
+    enum: ['compliant', 'warning', 'non_compliant', 'uninspected'],
+    default: 'uninspected',
+  },
+  currentOdometerKm: { type: Number, default: 0 },
+  hasActiveDowntime: { type: Boolean, default: false },
 });
 
-export default mongoose.models.Vehicle || mongoose.model<IVehicle>('Vehicle', VehicleSchema);
+export default (mongoose.models.Vehicle ||
+  mongoose.model<IVehicle>('Vehicle', VehicleSchema)) as mongoose.Model<IVehicle>;

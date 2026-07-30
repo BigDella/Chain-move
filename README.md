@@ -133,36 +133,64 @@ cd chain_move
 npm install
 ```
 
-3. Create `.env.local` and set the required variables:
+3. Create your local environment file from the safe contributor template:
 
 ```bash
-MONGODB_URI=<your_mongodb_connection_string>
-JWT_SECRET=<your_jwt_secret>
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-NEXT_PUBLIC_PRIVY_APP_ID=<your_privy_app_id>
-PRIVY_APP_SECRET=<your_privy_app_secret>
-PRIVY_JWKS_URL=<your_privy_jwks_url>
-PAYSTACK_SECRET_KEY=<optional_if_testing_payments>
-PAYSTACK_DVA_PREFERRED_BANK=<optional_paystack_bank_slug>
-RESEND_API_KEY=<optional_if_testing_emails>
+cp .env.example .env.local
 ```
 
-4. Start the development server:
+`.env.example` intentionally contains placeholder, localhost, and public testnet values only. Do not ask maintainers for production credentials, and never commit `.env.local` or any file containing real secrets. The repository `.gitignore` keeps `.env*` files ignored while explicitly allowing `.env.example` to remain tracked.
+
+4. Keep mock mode enabled for normal contributor work:
+
+```env
+ENABLE_MOCK_PAYMENTS=true
+ENABLE_MOCK_EMAILS=true
+ENABLE_MOCK_STELLAR=true
+```
+
+With mock mode enabled, contributors can develop UI and most backend flows without maintainer Paystack, Resend, or Stellar signing credentials. Replace placeholders only with your own sandbox/test credentials when an issue explicitly requires live provider testing.
+
+5. Start the development server:
 
 ```bash
 npm run dev
 ```
 
-5. Open `http://localhost:3000`.
+6. Open `http://localhost:3000`.
 
 ## Environment Notes
 
-- `MONGODB_URI` and `JWT_SECRET` are required for application and session state.
-- `NEXT_PUBLIC_PRIVY_APP_ID`, `PRIVY_APP_SECRET`, and `PRIVY_JWKS_URL` are required for the current Privy-backed auth flow.
-- `PAYSTACK_SECRET_KEY` is required for wallet funding flows.
-- `PAYSTACK_DVA_PREFERRED_BANK` optionally overrides the bank slug used when provisioning Paystack dedicated virtual accounts. For test keys, the app defaults to `test-bank`.
-- `RESEND_API_KEY` is only needed for email features.
-- Stellar variables are not required by the current code yet. The expected integration pass should introduce explicit values such as `STELLAR_NETWORK`, `STELLAR_HORIZON_URL`, `STELLAR_RPC_URL`, issuer account public keys, distribution account public keys, and contract IDs.
+Use `.env.example` as the source of truth for safe local defaults. The categories below explain which values contributors normally need to edit.
+
+| Variable | Status | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_APP_URL` | Required | Local app origin. Keep `http://localhost:3000` unless you run on another port. |
+| `MONGODB_URI` | Required | Use a local MongoDB database or your own disposable development database. Do not use maintainer production data. |
+| `JWT_SECRET` | Required | Set to any strong local development string. Do not reuse production secrets. |
+| `AUTH_SESSION_SECRET` | Optional | Fallback session secret for local development. |
+| `KYC_DOCUMENT_ENCRYPTION_KEY` | Optional | Local-only encryption fallback for KYC document references. Production uses maintainer-managed secrets. |
+| `NEXT_PUBLIC_PRIVY_APP_ID` | Required for Privy auth | Public Privy app ID for the current auth flow. Use your own test app when exercising auth. |
+| `PRIVY_APP_ID` | Optional | Server-side Privy app ID override; can match your test `NEXT_PUBLIC_PRIVY_APP_ID`. |
+| `PRIVY_APP_SECRET` | Required for live Privy auth | Server-only Privy test secret. Leave as a placeholder unless you are testing live Privy flows. |
+| `PRIVY_JWKS_URL` | Required for live Privy token verification | Use the JWKS URL for your own Privy test app. |
+| `PAYSTACK_PUBLIC_KEY` | Optional | Public test key for live Paystack checkout experiments. |
+| `PAYSTACK_SECRET_KEY` | Mock-only by default; required for live Paystack | Keep placeholder while `ENABLE_MOCK_PAYMENTS=true`; use only your own Paystack test secret for live payment testing. |
+| `PAYSTACK_DVA_PREFERRED_BANK` | Optional | Bank slug for Paystack dedicated virtual account tests. The contributor template uses `test-bank`. |
+| `RESEND_API_KEY` | Mock-only by default; required for live email | Keep placeholder while `ENABLE_MOCK_EMAILS=true`; use only your own Resend test key for live email testing. |
+| `BLOB_READ_WRITE_TOKEN` | Optional | Needed only when exercising Vercel Blob-backed uploads outside managed environments. |
+| `STELLAR_NETWORK` | Planned / mock-safe | Defaults to `testnet` for future Stellar integration work. |
+| `STELLAR_HORIZON_URL` | Planned / mock-safe | Public Stellar Testnet Horizon URL. |
+| `STELLAR_RPC_URL` | Planned / mock-safe | Public Stellar Testnet Soroban RPC URL. |
+| `STELLAR_ASSET_CODE` | Planned / mock-safe | Development asset code placeholder, currently `CMOVE`. |
+| `STELLAR_ISSUER_PUBLIC_KEY` | Planned / mock-only placeholder | Public key placeholder only; never commit secret keys or seed phrases. |
+| `STELLAR_DISTRIBUTION_PUBLIC_KEY` | Planned / mock-only placeholder | Public key placeholder only; never commit secret keys or seed phrases. |
+| `STELLAR_CONTRACT_ID` | Planned / mock-only placeholder | Fill only after deploying your own test contract. |
+| `ENABLE_MOCK_PAYMENTS` | Mock mode | Keep `true` unless testing Paystack with your own sandbox keys. |
+| `ENABLE_MOCK_EMAILS` | Mock mode | Keep `true` unless testing Resend with your own key. |
+| `ENABLE_MOCK_STELLAR` | Mock mode | Keep `true` unless testing public Stellar Testnet reads or your own test deployment. |
+
+Maintainer-only values such as production database URLs, production Paystack/Resend/Privy secrets, treasury private keys, Stellar signer secrets, wallet recovery material, and deployment credentials must never be committed or requested for contributor setup.
 
 ## Driver Dedicated Repayment Accounts
 
@@ -197,6 +225,7 @@ If Paystack DVA eligibility for the business requires additional customer identi
 
 ## Stellar References
 
+- [ChainMove `stellar.toml` Plan](docs/stellar-toml.md)
 - [Stellar Networks](https://developers.stellar.org/docs/networks)
 - [Stellar Contract SDKs](https://developers.stellar.org/docs/tools/sdks/contract-sdks)
 - [Publishing Stellar Asset Information](https://developers.stellar.org/docs/tokens/publishing-asset-info)

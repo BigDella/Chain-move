@@ -8,8 +8,22 @@
     "dev:stable": "next dev --webpack --disable-source-maps",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:contracts": "vitest run __tests__/lib/api",
     "typecheck": "tsc --noEmit",
-    "start": "next start"
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi-drift.ts && tsx scripts/check-openapi-compat.ts",
+    "start": "next start",
+    "audit:export": "tsx scripts/audit-export.ts",
+    "audit:migrate": "tsx scripts/audit-migrate.ts",
+    "audit:verify": "tsx scripts/audit-verify.ts",
+    "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
+    "demo:pool-asset": "tsx scripts/demo-pool-asset.ts",
+    "backup": "tsx scripts/backup/run-backup.ts",
+    "backup:list": "tsx scripts/backup/run-backup.ts --list",
+    "backup:drill": "tsx scripts/backup/run-drill.ts",
+    "restore": "tsx scripts/backup/run-restore.ts",
+    "restore:verify": "tsx scripts/backup/run-restore.ts --verify-only",
+    "restore:token": "tsx scripts/backup/run-restore.ts --generate-token"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
@@ -104,12 +118,14 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/use-sync-external-store": "^1.5.0",
     "eslint": "^9.39.2",
     "eslint-config-next": "^16.2.3",
     "jsdom": "^25.0.1",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   }
 }
