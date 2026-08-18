@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { StaticExchangeRateAdapter, TimeoutExchangeRateAdapter, type ExchangeRateProviderAdapter } from "@/lib/fx/adapters"
 import { ExchangeRateQuoteService, InMemoryQuoteRepository } from "@/lib/fx/quote-service"
-import { convertMajorAmount } from "@/lib/fx/types"
+import { convertMajorAmount, parseDecimalToMinorUnits } from "@/lib/fx/types"
 
 function createService(adapters: ExchangeRateProviderAdapter[] = [new StaticExchangeRateAdapter({ "USD/NGN": 1500 })]) {
   return new ExchangeRateQuoteService(adapters, new InMemoryQuoteRepository(), {
@@ -26,6 +26,7 @@ describe("ExchangeRateQuoteService", () => {
     })
 
     expect(quote.convertedAmountMinor).toBe(1_500_000)
+    await service.lockQuote(quote.id, now)
 
     const consumed = await service.consumeQuote({
       quoteId: quote.id,
@@ -57,6 +58,7 @@ describe("ExchangeRateQuoteService", () => {
       sourceAmountMajor: 1,
       now: new Date("2026-01-01T00:00:00.000Z"),
     })
+    await service.lockQuote(quote.id, new Date("2026-01-01T00:00:00.000Z"))
 
     await expect(
       service.consumeQuote({
@@ -68,6 +70,26 @@ describe("ExchangeRateQuoteService", () => {
         now: new Date("2026-01-01T00:02:00.000Z"),
       }),
     ).rejects.toThrow("expired")
+  })
+
+  it("allows only one concurrent consumer of a locked quote", async () => {
+    const now = new Date("2026-01-01T00:00:00.000Z")
+    const service = createService()
+    const quote = await service.createQuote({
+      baseCurrency: "USD",
+      quoteCurrency: "NGN",
+      sourceAmountMajor: 3,
+      now,
+    })
+    await service.lockQuote(quote.id, now)
+
+    const attempts = await Promise.allSettled([
+      service.consumeQuote({ quoteId: quote.id, baseCurrency: "USD", quoteCurrency: "NGN", sourceAmountMinor: 300, consumedBy: "a", now }),
+      service.consumeQuote({ quoteId: quote.id, baseCurrency: "USD", quoteCurrency: "NGN", sourceAmountMinor: 300, consumedBy: "b", now }),
+    ])
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1)
+    expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1)
   })
 
   it("supports inverse pairs through the static adapter", async () => {
@@ -116,6 +138,8 @@ describe("ExchangeRateQuoteService", () => {
   })
 
   it("uses deterministic minor-unit rounding and rejects invalid rates", () => {
+    expect(parseDecimalToMinorUnits("1.05", "USD")).toBe(105)
+    expect(() => parseDecimalToMinorUnits("1.005", "USD")).toThrow("at most 2 decimal")
     expect(
       convertMajorAmount({
         amountMajor: 1.005,
