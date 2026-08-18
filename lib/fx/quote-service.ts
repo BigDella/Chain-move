@@ -22,6 +22,7 @@ export interface QuoteRepository {
   findById(id: string): Promise<ExchangeRateQuoteSnapshot | null>
   findByIdempotencyKey(key: string): Promise<ExchangeRateQuoteSnapshot | null>
   update(snapshot: ExchangeRateQuoteSnapshot): Promise<ExchangeRateQuoteSnapshot>
+  consume(id: string, consumedBy: string, consumedAt: Date): Promise<ExchangeRateQuoteSnapshot | null>
 }
 
 export class InMemoryQuoteRepository implements QuoteRepository {
@@ -47,6 +48,14 @@ export class InMemoryQuoteRepository implements QuoteRepository {
   async update(snapshot: ExchangeRateQuoteSnapshot) {
     this.quotes.set(snapshot.id, structuredClone(snapshot))
     return structuredClone(snapshot)
+  }
+
+  async consume(id: string, consumedBy: string, consumedAt: Date) {
+    const quote = this.quotes.get(id)
+    if (!quote || quote.status !== "locked" || quote.expiresAt.getTime() < consumedAt.getTime()) return null
+    const consumed = { ...quote, status: "consumed" as const, consumedAt, consumedBy }
+    this.quotes.set(id, structuredClone(consumed))
+    return structuredClone(consumed)
   }
 }
 
@@ -153,7 +162,8 @@ export class ExchangeRateQuoteService {
     quoteId: string
     baseCurrency: string
     quoteCurrency: string
-    sourceAmountMajor: number
+    sourceAmountMajor?: number
+    sourceAmountMinor?: number
     direction?: QuoteDirection
     amountPolicy?: AmountPolicy
     consumedBy: string
@@ -177,20 +187,23 @@ export class ExchangeRateQuoteService {
       throw new Error("Quote amount policy does not match the requested conversion.")
     }
 
-    if (quote.amountPolicy === "exact-source" && quote.sourceAmountMajor !== input.sourceAmountMajor) {
-      throw new Error("Quote source amount does not match the requested conversion.")
+    if (quote.status !== "locked") {
+      if (quote.status === "consumed") throw new Error("Quote has already been consumed.")
+      throw new Error("Quote must be locked before it can be consumed.")
     }
 
-    if (quote.status === "consumed") {
-      throw new Error("Quote has already been consumed.")
+    if (quote.amountPolicy === "exact-source") {
+      if (input.sourceAmountMinor !== undefined && quote.sourceAmountMinor !== input.sourceAmountMinor) {
+        throw new Error("Quote source amount does not match the requested conversion.")
+      }
+      if (input.sourceAmountMinor === undefined && quote.sourceAmountMajor !== input.sourceAmountMajor) {
+        throw new Error("Quote source amount does not match the requested conversion.")
+      }
     }
 
-    return this.repository.update({
-      ...quote,
-      status: "consumed",
-      consumedAt: now,
-      consumedBy: input.consumedBy,
-    })
+    const consumed = await this.repository.consume(quote.id, input.consumedBy, now)
+    if (!consumed) throw new Error("Quote was consumed, expired, or unlocked by another request.")
+    return consumed
   }
 
   private async resolveProviderQuote(baseCurrency: CurrencyCode, quoteCurrency: CurrencyCode) {

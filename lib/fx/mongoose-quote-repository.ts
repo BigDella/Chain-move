@@ -79,4 +79,19 @@ export class MongooseQuoteRepository implements QuoteRepository {
     if (!document) throw new Error("Quote not found.")
     return toSnapshot(document)
   }
+
+  async consume(id: string, consumedBy: string, consumedAt: Date) {
+    const document = await ExchangeRateQuote.findOneAndUpdate(
+      {
+        _id: id,
+        status: "locked",
+        expiresAt: { $gte: consumedAt },
+      },
+      {
+        $set: { status: "consumed", consumedAt, consumedBy },
+      },
+      { new: true, runValidators: true },
+    )
+    return document ? toSnapshot(document) : null
+  }
 }
