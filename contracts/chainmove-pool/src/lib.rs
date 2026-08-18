@@ -24,6 +24,7 @@ pub enum ContractError {
     Overpayment = 11,
     RepayerMismatch = 12,
     NothingToRefund = 13,
+    RefundTooSmall = 14,
 }
 
 #[contracttype]
@@ -86,11 +87,20 @@ struct OperationReceipt {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RefundBasis {
+    basis_invested: i128,
+    basis_units: u64,
+    cumulative_refunded: i128,
+}
+
+#[contracttype]
 #[derive(Clone)]
 enum DataKey {
     Pool(u64),
     InvestorPosition(u64, Address),
     Reference(String),
+    RefundBasis(u64, Address),
     LegacyPool(u64), // Legacy key format for migration testing
 }
 
@@ -234,6 +244,20 @@ impl ChainMovePoolContract {
         position.units = checked_add_u64(position.units, units)?;
         env.storage().persistent().set(&position_key, &position);
         env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
+
+        // Any new funding starts a new exact refund epoch from the combined
+        // principal/unit position. Subsequent partitioned refunds all resolve
+        // against this immutable basis instead of repeatedly rounding ratios.
+        let refund_basis_key = DataKey::RefundBasis(pool_id, investor.clone());
+        env.storage().persistent().set(
+            &refund_basis_key,
+            &RefundBasis {
+                basis_invested: position.invested,
+                basis_units: position.units,
+                cumulative_refunded: 0,
+            },
+        );
+        env.storage().persistent().extend_ttl(&refund_basis_key, RENT_THRESHOLD, RENT_EXTEND_TO);
 
         write_reference(
             &env,
@@ -404,9 +428,20 @@ impl ChainMovePoolContract {
             return Err(ContractError::NothingToRefund);
         }
 
-        let refund_units = release_units(&position, amount)?;
+        let refund_basis_key = DataKey::RefundBasis(pool_id, investor.clone());
+        let mut refund_basis: RefundBasis = env
+            .storage()
+            .persistent()
+            .get(&refund_basis_key)
+            .unwrap_or(RefundBasis {
+                basis_invested: position.invested,
+                basis_units: position.units,
+                cumulative_refunded: 0,
+            });
+        let refund_units = release_units(&position, &refund_basis, amount)?;
         transfer_from_contract_to_participant(&env, &pool.asset, &investor, amount);
 
+        refund_basis.cumulative_refunded = checked_add_i128(refund_basis.cumulative_refunded, amount)?;
         position.refunded = checked_add_i128(position.refunded, amount)?;
         position.invested = checked_sub_i128(position.invested, amount)?;
         position.units = checked_sub_u64(position.units, refund_units)?;
@@ -417,6 +452,12 @@ impl ChainMovePoolContract {
         env.storage().persistent().extend_ttl(&pool_key, RENT_THRESHOLD, RENT_EXTEND_TO);
         env.storage().persistent().set(&position_key, &position);
         env.storage().persistent().extend_ttl(&position_key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        if position.invested == 0 {
+            env.storage().persistent().remove(&refund_basis_key);
+        } else {
+            env.storage().persistent().set(&refund_basis_key, &refund_basis);
+            env.storage().persistent().extend_ttl(&refund_basis_key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        }
 
         write_reference(
             &env,
@@ -640,20 +681,35 @@ fn allocate_units(pool: &Pool, amount: i128, new_total: i128) -> Result<u64, Con
     u64::try_from(unit_amount).map_err(|_| ContractError::ArithmeticOverflow)
 }
 
-fn release_units(position: &InvestorPosition, amount: i128) -> Result<u64, ContractError> {
+fn release_units(
+    position: &InvestorPosition,
+    basis: &RefundBasis,
+    amount: i128,
+) -> Result<u64, ContractError> {
     if amount == position.invested {
         return Ok(position.units);
     }
 
-    let unit_amount = amount
-        .checked_mul(position.units as i128)
-        .ok_or(ContractError::ArithmeticOverflow)?
-        .checked_div(position.invested)
+    let cumulative_refunded = checked_add_i128(basis.cumulative_refunded, amount)?;
+    let remaining_principal = checked_sub_i128(basis.basis_invested, cumulative_refunded)?;
+    let numerator = remaining_principal
+        .checked_mul(basis.basis_units as i128)
         .ok_or(ContractError::ArithmeticOverflow)?;
-    if unit_amount <= 0 {
-        return Err(ContractError::InvalidInput);
+    let quotient = numerator
+        .checked_div(basis.basis_invested)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let remainder = numerator
+        .checked_rem(basis.basis_invested)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    let entitled_units = quotient + i128::from(remainder > 0);
+    let entitled_units = u64::try_from(entitled_units).map_err(|_| ContractError::ArithmeticOverflow)?;
+    let released = checked_sub_u64(position.units, entitled_units)?;
+    if released == 0 {
+        // The refund is below the current unit granularity. Reject it explicitly
+        // so principal cannot move while all corresponding units are retained.
+        return Err(ContractError::RefundTooSmall);
     }
-    u64::try_from(unit_amount).map_err(|_| ContractError::ArithmeticOverflow)
+    Ok(released)
 }
 
 fn transfer_from_participant_to_contract(
