@@ -17,6 +17,7 @@
     "audit:migrate": "tsx scripts/audit-migrate.ts",
     "audit:verify": "tsx scripts/audit-verify.ts",
     "fx:legacy-check": "tsx scripts/check-legacy-fx-transactions.ts",
+    "kyc:migrate-private": "tsx scripts/migrate-public-kyc-blobs.ts",
     "demo:pool-asset": "tsx scripts/demo-pool-asset.ts",
     "backup": "tsx scripts/backup/run-backup.ts",
     "backup:list": "tsx scripts/backup/run-backup.ts --list",
