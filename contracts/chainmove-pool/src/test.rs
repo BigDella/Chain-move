@@ -1,6 +1,6 @@
 extern crate std;
 
-use super::{ChainMovePoolContract, ChainMovePoolContractClient, ContractError};
+use super::{allocate_units, ChainMovePoolContract, ChainMovePoolContractClient, ContractError, Pool};
 use soroban_sdk::{testutils::Address as _, token, Address, Env, String};
 
 const POOL_ID: u64 = 1;
@@ -130,6 +130,61 @@ fn funding_transfers_tokens_into_contract_custody() {
     assert_eq!(pool.funded_units, 25);
     assert_eq!(token.balance(&fixture.contract_id), 2_500);
     assert_eq!(token.balance(&fixture.investor), 7_500);
+}
+
+#[test]
+fn cumulative_rounding_is_bounded_and_conserves_all_units() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let repayer = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let base = Pool {
+        id: 7,
+        owner,
+        repayer,
+        asset,
+        asset_label: String::from_str(&env, "awkward-ratio"),
+        total_units: 3,
+        funded_units: 0,
+        target_amount: 10,
+        total_invested: 0,
+        total_repaid: 0,
+        active: true,
+    };
+
+    let allocate_order = |amounts: [i128; 2]| {
+        let mut pool = base.clone();
+        let mut result = [0_u64; 2];
+        for (index, amount) in amounts.iter().enumerate() {
+            let new_total = pool.total_invested + amount;
+            let units = allocate_units(&pool, new_total).unwrap();
+            pool.total_invested = new_total;
+            pool.funded_units += units;
+            result[index] = units;
+        }
+        (result, pool.funded_units)
+    };
+
+    let (forward, forward_total) = allocate_order([4, 6]);
+    let (reverse, reverse_total) = allocate_order([6, 4]);
+    assert!(forward[0].abs_diff(reverse[1]) <= 1);
+    assert!(forward[1].abs_diff(reverse[0]) <= 1);
+    assert_eq!(forward_total, 3);
+    assert_eq!(reverse_total, 3);
+}
+
+#[test]
+fn funding_below_the_current_unit_granularity_is_explicitly_rejected() {
+    let fixture = create_fixture();
+    approve(&fixture, &fixture.investor, 1);
+    let result = pool_client(&fixture).try_fund_pool(
+        &fixture.investor,
+        &POOL_ID,
+        &fixture.asset,
+        &1,
+        &String::from_str(&fixture.env, "fund-dust"),
+    );
+    assert_eq!(result.unwrap_err().unwrap(), ContractError::InvestmentTooSmall);
 }
 
 #[test]
