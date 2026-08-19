@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol,
+    contract, contracterror, contractimpl, contracttype, token, xdr::ToXdr, Address, BytesN, Env,
+    String, Symbol,
 };
 
 #[contract]
@@ -99,7 +100,15 @@ struct RefundBasis {
 enum DataKey {
     Pool(u64),
     InvestorPosition(u64, Address),
+    // Legacy global reference key: scoped only by the raw external reference.
+    // Retained solely so receipts written before the scoped key existed can
+    // still be recognized as idempotent replays. Never written to anymore.
     Reference(String),
+    // Reference key scoped by domain/version, operation kind, pool, and actor,
+    // then hashed to a fixed-size digest so an unrelated pool/operation/actor
+    // can never collide with (or be blocked by) another scope's reference,
+    // and storage cost stays bounded regardless of external reference length.
+    ScopedReference(BytesN<32>),
     RefundBasis(u64, Address),
     LegacyPool(u64), // Legacy key format for migration testing
 }
@@ -107,6 +116,7 @@ enum DataKey {
 const DAY_IN_LEDGERS: u32 = 17280;
 const RENT_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 const RENT_EXTEND_TO: u32 = 30 * DAY_IN_LEDGERS;
+const REFERENCE_KEY_DOMAIN: u32 = 1;
 
 #[contractimpl]
 impl ChainMovePoolContract {
@@ -608,6 +618,39 @@ impl ChainMovePoolContract {
     }
 }
 
+fn scoped_reference_key(
+    env: &Env,
+    kind: &OperationKind,
+    pool_id: u64,
+    participant: &Address,
+    reference: &String,
+) -> DataKey {
+    let scope = (
+        REFERENCE_KEY_DOMAIN,
+        kind.clone(),
+        pool_id,
+        participant.clone(),
+        reference.clone(),
+    );
+    let digest = env.crypto().sha256(&scope.to_xdr(env));
+    DataKey::ScopedReference(digest.to_bytes())
+}
+
+fn load_investor_position(
+    env: &Env,
+    pool_id: u64,
+    participant: Address,
+) -> Result<InvestorPosition, ContractError> {
+    let pos_key = DataKey::InvestorPosition(pool_id, participant);
+    let position = env
+        .storage()
+        .persistent()
+        .get(&pos_key)
+        .ok_or(ContractError::InvestorPositionNotFound)?;
+    env.storage().persistent().extend_ttl(&pos_key, RENT_THRESHOLD, RENT_EXTEND_TO);
+    Ok(position)
+}
+
 fn read_idempotent_position(
     env: &Env,
     reference: &String,
@@ -616,13 +659,13 @@ fn read_idempotent_position(
     participant: Address,
     amount: i128,
 ) -> Result<Option<InvestorPosition>, ContractError> {
-    let key = DataKey::Reference(reference.clone());
+    let scoped_key = scoped_reference_key(env, &kind, pool_id, &participant, reference);
     if let Some(receipt) = env
         .storage()
         .persistent()
-        .get::<DataKey, OperationReceipt>(&key)
+        .get::<DataKey, OperationReceipt>(&scoped_key)
     {
-        env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+        env.storage().persistent().extend_ttl(&scoped_key, RENT_THRESHOLD, RENT_EXTEND_TO);
         if receipt.kind != kind
             || receipt.pool_id != pool_id
             || receipt.participant != participant
@@ -631,14 +674,28 @@ fn read_idempotent_position(
             return Err(ContractError::DuplicateReference);
         }
 
-        let pos_key = DataKey::InvestorPosition(pool_id, participant);
-        let position = env
-            .storage()
-            .persistent()
-            .get(&pos_key)
-            .ok_or(ContractError::InvestorPositionNotFound)?;
-        env.storage().persistent().extend_ttl(&pos_key, RENT_THRESHOLD, RENT_EXTEND_TO);
-        return Ok(Some(position));
+        return Ok(Some(load_investor_position(env, pool_id, participant)?));
+    }
+
+    // Backward-compatible read for receipts written under the old, unscoped
+    // global key. Only an exact match for this operation's scope counts as a
+    // replay; any other scope simply ignores the legacy entry instead of
+    // erroring, since a stale global key must never be able to block (or be
+    // hijacked by) an unrelated pool/operation/actor.
+    let legacy_key = DataKey::Reference(reference.clone());
+    if let Some(receipt) = env
+        .storage()
+        .persistent()
+        .get::<DataKey, OperationReceipt>(&legacy_key)
+    {
+        if receipt.kind == kind
+            && receipt.pool_id == pool_id
+            && receipt.participant == participant
+            && receipt.amount == amount
+        {
+            env.storage().persistent().extend_ttl(&legacy_key, RENT_THRESHOLD, RENT_EXTEND_TO);
+            return Ok(Some(load_investor_position(env, pool_id, participant)?));
+        }
     }
 
     Ok(None)
@@ -652,7 +709,7 @@ fn write_reference(
     participant: Address,
     amount: i128,
 ) {
-    let key = DataKey::Reference(reference);
+    let key = scoped_reference_key(env, &kind, pool_id, &participant, &reference);
     env.storage().persistent().set(
         &key,
         &OperationReceipt {
