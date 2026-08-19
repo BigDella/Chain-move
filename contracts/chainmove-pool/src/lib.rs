@@ -26,6 +26,7 @@ pub enum ContractError {
     RepayerMismatch = 12,
     NothingToRefund = 13,
     RefundTooSmall = 14,
+    InvestmentTooSmall = 15,
 }
 
 #[contracttype]
@@ -68,6 +69,18 @@ pub struct TransitionEvent {
     pub post_funded_units: u64,
     pub post_total_invested: i128,
     pub post_total_repaid: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnitAllocationEvent {
+    pub version: u32,
+    pub pool_id: u64,
+    pub investor: Address,
+    pub invested_amount: i128,
+    pub allocated_units: u64,
+    pub post_funded_units: u64,
+    pub cumulative_remainder_numerator: i128,
 }
 
 #[contracttype]
@@ -223,7 +236,7 @@ impl ChainMovePoolContract {
             return Err(ContractError::Oversubscribed);
         }
 
-        let units = allocate_units(&pool, amount, new_total)?;
+        let units = allocate_units(&pool, new_total)?;
         let new_units = checked_add_u64(pool.funded_units, units)?;
         if new_units > pool.total_units {
             return Err(ContractError::Oversubscribed);
@@ -284,12 +297,13 @@ impl ChainMovePoolContract {
             amount,
             pool_id,
             investor.clone(),
-            investor,
+            investor.clone(),
             reference,
             pool.funded_units,
             pool.total_invested,
             pool.total_repaid,
         );
+        publish_unit_allocation(&env, &pool, investor, amount, units)?;
 
         Ok(position)
     }
@@ -723,20 +737,52 @@ fn write_reference(
     env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
 }
 
-fn allocate_units(pool: &Pool, amount: i128, new_total: i128) -> Result<u64, ContractError> {
-    if new_total == pool.target_amount {
-        return checked_sub_u64(pool.total_units, pool.funded_units);
-    }
-
-    let unit_amount = amount
+fn allocate_units(pool: &Pool, new_total: i128) -> Result<u64, ContractError> {
+    // Cumulative largest-remainder accounting: each transition advances the
+    // pool to floor(total_invested * total_units / target). This carries the
+    // fractional numerator forward instead of gifting all dust to the final
+    // funder. Any two equal contributions can differ by at most one unit.
+    let cumulative_units = new_total
         .checked_mul(pool.total_units as i128)
         .ok_or(ContractError::ArithmeticOverflow)?
         .checked_div(pool.target_amount)
         .ok_or(ContractError::ArithmeticOverflow)?;
-    if unit_amount <= 0 {
-        return Err(ContractError::InvalidInput);
+    let cumulative_units = u64::try_from(cumulative_units)
+        .map_err(|_| ContractError::ArithmeticOverflow)?;
+    let unit_amount = checked_sub_u64(cumulative_units, pool.funded_units)?;
+    if unit_amount == 0 {
+        // The minimum depends on the carried remainder; callers can retry with
+        // enough principal to advance the cumulative entitlement by one unit.
+        return Err(ContractError::InvestmentTooSmall);
     }
-    u64::try_from(unit_amount).map_err(|_| ContractError::ArithmeticOverflow)
+    Ok(unit_amount)
+}
+
+#[allow(deprecated)]
+fn publish_unit_allocation(
+    env: &Env,
+    pool: &Pool,
+    investor: Address,
+    invested_amount: i128,
+    allocated_units: u64,
+) -> Result<(), ContractError> {
+    let numerator = pool
+        .total_invested
+        .checked_mul(pool.total_units as i128)
+        .ok_or(ContractError::ArithmeticOverflow)?;
+    env.events().publish(
+        (Symbol::new(env, "chainmove_pool_v1"), Symbol::new(env, "units_allocated_v1")),
+        UnitAllocationEvent {
+            version: 1,
+            pool_id: pool.id,
+            investor,
+            invested_amount,
+            allocated_units,
+            post_funded_units: pool.funded_units,
+            cumulative_remainder_numerator: numerator % pool.target_amount,
+        },
+    );
+    Ok(())
 }
 
 fn release_units(
