@@ -443,6 +443,64 @@ fn refunds_return_custody_and_reduce_principal_units() {
 }
 
 #[test]
+fn partitioned_refunds_match_an_equivalent_one_shot_refund() {
+    let partitioned = create_fixture();
+    fund(&partitioned, &partitioned.investor, 3_333, "fund-partitioned");
+    for (index, amount) in [1_111_i128, 1_111_i128].iter().enumerate() {
+        pool_client(&partitioned)
+            .try_refund_position(
+                &partitioned.owner,
+                &POOL_ID,
+                &partitioned.investor,
+                amount,
+                &String::from_str(&partitioned.env, if index == 0 { "refund-part-1" } else { "refund-part-2" }),
+            )
+            .unwrap()
+            .unwrap();
+    }
+    let partitioned_position = pool_client(&partitioned)
+        .try_read_investor_position(&partitioned.investor, &POOL_ID)
+        .unwrap()
+        .unwrap();
+
+    let one_shot = create_fixture();
+    fund(&one_shot, &one_shot.investor, 3_333, "fund-one-shot");
+    let one_shot_position = pool_client(&one_shot)
+        .try_refund_position(
+            &one_shot.owner,
+            &POOL_ID,
+            &one_shot.investor,
+            &2_222,
+            &String::from_str(&one_shot.env, "refund-one-shot"),
+        )
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(partitioned_position.invested, one_shot_position.invested);
+    assert_eq!(partitioned_position.units, one_shot_position.units);
+}
+
+#[test]
+fn refund_below_unit_granularity_is_rejected_without_moving_principal() {
+    let fixture = create_fixture();
+    fund(&fixture, &fixture.investor, 1_000, "fund-dust-refund");
+    let result = pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &1,
+        &String::from_str(&fixture.env, "refund-dust"),
+    );
+    assert_eq!(result.unwrap_err().unwrap(), ContractError::RefundTooSmall);
+    let position = pool_client(&fixture)
+        .try_read_investor_position(&fixture.investor, &POOL_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(position.invested, 1_000);
+    assert_eq!(position.units, 10);
+}
+
+#[test]
 fn conservation_of_value_holds_across_funding_refund_and_repayment() {
     let fixture = create_fixture();
     let token = token_client(&fixture.env, &fixture.asset);
@@ -545,3 +603,114 @@ fn test_ttl_and_legacy_key_migration() {
     });
 }
 
+
+#[test]
+fn fully_repaid_position_rejects_refunds_completely() {
+    let fixture = create_fixture();
+    
+    // Fund 1,000
+    fund(&fixture, &fixture.investor, 1_000, "fund-1");
+    
+    // Repay 1,000
+    approve(&fixture, &fixture.repayer, 1_000);
+    pool_client(&fixture)
+        .try_record_repayment(
+            &fixture.repayer,
+            &POOL_ID,
+            &fixture.investor,
+            &fixture.asset,
+            &1_000,
+            &String::from_str(&fixture.env, "repay-full"),
+        )
+        .unwrap()
+        .unwrap();
+
+    // Try to refund anything should fail
+    let refund_result = pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &1,
+        &String::from_str(&fixture.env, "refund-post-repay"),
+    );
+    
+    assert_eq!(
+        refund_result.unwrap_err().unwrap(),
+        ContractError::NothingToRefund
+    );
+}
+
+#[test]
+fn partial_repayment_and_refunds_sequence_preserves_invariants() {
+    let fixture = create_fixture();
+    
+    // Fund 5,000
+    fund(&fixture, &fixture.investor, 5_000, "fund-1");
+    
+    // Partial Repay 2,000
+    approve(&fixture, &fixture.repayer, 2_000);
+    pool_client(&fixture)
+        .try_record_repayment(
+            &fixture.repayer,
+            &POOL_ID,
+            &fixture.investor,
+            &fixture.asset,
+            &2_000,
+            &String::from_str(&fixture.env, "repay-1"),
+        )
+        .unwrap()
+        .unwrap();
+        
+    // Try to refund 4,000 -> Should fail since refundable is 3,000
+    let refund_result_too_large = pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &3_001,
+        &String::from_str(&fixture.env, "refund-too-large"),
+    );
+    assert_eq!(
+        refund_result_too_large.unwrap_err().unwrap(),
+        ContractError::NothingToRefund
+    );
+
+    // Refund 1,500 -> Should succeed
+    pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &1_500,
+        &String::from_str(&fixture.env, "refund-1"),
+    ).unwrap().unwrap();
+    
+    // Refund another 1,500 -> Should succeed, making it fully refunded/repaid
+    pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &1_500,
+        &String::from_str(&fixture.env, "refund-2"),
+    ).unwrap().unwrap();
+
+    // Next refund of 1 should fail
+    let refund_result_empty = pool_client(&fixture).try_refund_position(
+        &fixture.owner,
+        &POOL_ID,
+        &fixture.investor,
+        &1,
+        &String::from_str(&fixture.env, "refund-3"),
+    );
+    assert_eq!(
+        refund_result_empty.unwrap_err().unwrap(),
+        ContractError::NothingToRefund
+    );
+    
+    let position = pool_client(&fixture)
+        .try_read_investor_position(&fixture.investor, &POOL_ID)
+        .unwrap()
+        .unwrap();
+        
+    assert_eq!(position.invested, 2_000);
+    assert_eq!(position.repaid, 2_000);
+    assert_eq!(position.refunded, 3_000);
+}
